@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NS Solution Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body,#root{height:100%;width:100%;overflow:hidden}
+body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0F1117}
+textarea,input,select,button{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+"use strict";
+const h=React.createElement,F=React.Fragment,{useState,useCallback,useRef,useEffect}=React;
+
+const SCRIPT_TYPES={
+"Client Script":{prefix:"CS",entryPoints:[
+{name:"pageInit",description:"Fires when the page completes loading or when a form is reset",pseudo:""},
+{name:"fieldChanged",description:"Fires after a field value is changed",pseudo:""},
+{name:"postSourcing",description:"Fires after all sourcing is complete for a field",pseudo:""},
+{name:"lineInit",description:"Fires when inserting a new line or selecting an existing line",pseudo:""},
+{name:"validateField",description:"Fires before a field value change is committed",pseudo:""},
+{name:"validateLine",description:"Fires before a line is added to a sublist",pseudo:""},
+{name:"validateInsert",description:"Fires before a new line is inserted in a sublist",pseudo:""},
+{name:"validateDelete",description:"Fires before a line is removed from a sublist",pseudo:""},
+{name:"saveRecord",description:"Fires when the record is saved",pseudo:""},
+{name:"sublistChanged",description:"Fires after a sublist commit",pseudo:""}
+]},
+"User Event":{prefix:"UE",entryPoints:[
+{name:"beforeLoad",description:"Fires before the record form is loaded",pseudo:""},
+{name:"beforeSubmit",description:"Fires before the record is submitted to the database",pseudo:""},
+{name:"afterSubmit",description:"Fires after the record is submitted to the database",pseudo:""}
+]},
+"Map/Reduce":{prefix:"MR",entryPoints:[
+{name:"getInputData",description:"Defines the input data for processing",pseudo:""},
+{name:"map",description:"Processes each key-value pair from getInputData",pseudo:""},
+{name:"reduce",description:"Processes each group of values by key",pseudo:""},
+{name:"summarize",description:"Summarizes the results of map and reduce stages",pseudo:""}
+]},
+"Scheduled Script":{prefix:"SS",entryPoints:[{name:"execute",description:"Main execution point, runs on schedule or on demand",pseudo:""}]},
+"Suitelet":{prefix:"SL",entryPoints:[{name:"onRequest",description:"Handles GET and POST requests to the Suitelet URL",pseudo:""}]},
+"Restlet":{prefix:"RL",entryPoints:[
+{name:"get",description:"Handles HTTP GET requests",pseudo:""},
+{name:"post",description:"Handles HTTP POST requests",pseudo:""},
+{name:"put",description:"Handles HTTP PUT requests",pseudo:""},
+{name:"delete",description:"Handles HTTP DELETE requests",pseudo:""}
+]},
+"Workflow Action Script":{prefix:"WA",entryPoints:[{name:"onAction",description:"Fires when the workflow action is triggered",pseudo:""}]},
+"Mass Update Script":{prefix:"MU",entryPoints:[{name:"each",description:"Processes each record matching the mass update criteria",pseudo:""}]}
+};
+
+const FIELD_TYPES=["Free-Form Text","Text Area","Long Text","Rich Text","Email","Phone","Integer","Decimal","Currency","Percent","Checkbox","Date","Date/Time","Time of Day","List/Record","Multiple Select","Inline HTML"];
+const EST_DEFAULT=[{task:"Requirement Gathering/Scoping",min:"",max:""},{task:"Testing",min:"",max:""},{task:"Training",min:"",max:""}];
+
+function mkTask(i){return{id:Date.now()+i,name:"Task "+(i+1),context:"",requirements:[{ref:"REQ-01",type:"user",details:""}],assumptions:[{ref:"ASM-01",details:""}],solutionOverview:"",diagrams:"",dataStructures:[{id:Date.now(),recordName:"",type:"standard",customRecordId:"",headerFields:[{name:"",id:"_ccc_",fieldType:"",notes:""}],lineFields:[]}],scripts:[]}}
+function mkScript(type){var t=SCRIPT_TYPES[type];return{id:Date.now()+Math.random(),type:type,name:"CCC | [Description] "+t.prefix,deployOn:"",triggers:"",entryPoints:t.entryPoints.map(function(ep){return Object.assign({},ep)})}}
+function mkSolution(){return{id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),savedAt:new Date().toISOString(),project:{title:"",customer:"",version:"1.0",date:new Date().toLocaleDateString(),deployment:""},tasks:[mkTask(0)],estimates:EST_DEFAULT.map(function(e){return Object.assign({},e)})}}
+
+var K={bg:"#0F1117",sfc:"#181B25",sfcH:"#1E2230",bdr:"#2A2E3B",bdrF:"#5B8DEF",acc:"#5B8DEF",accBg:"rgba(91,141,239,0.08)",txt:"#E4E7EE",dim:"#8B90A0",mut:"#5A5F72",ok:"#4ADE80",warn:"#FBBF24",err:"#EF4444",errBg:"rgba(239,68,68,0.08)",code:"#1A1D27",ora:"#F59E0B"};
+var mono="'JetBrains Mono','SF Mono','Cascadia Code','Fira Code',monospace";
+var sans="'DM Sans','Inter',-apple-system,sans-serif";
+
+// --- Primitives ---
+function TI(p){
+  var El=p.multi?"textarea":"input";
+  var props={value:p.value,onChange:function(e){p.onChange(e.target.value)},placeholder:p.placeholder,style:{width:"100%",padding:p.multi?"10px 12px":"8px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:p.isMono?mono:sans,outline:"none",resize:p.multi?"vertical":"none",lineHeight:1.6,transition:"border-color 0.15s"},onFocus:function(e){e.target.style.borderColor=K.bdrF},onBlur:function(e){e.target.style.borderColor=K.bdr}};
+  if(p.multi)props.rows=p.rows||3;
+  return h("div",{style:{marginBottom:14}},
+    p.label?h("label",{style:{display:"block",fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:5,fontFamily:sans}},p.label):null,
+    h(El,props)
+  );
+}
+
+function Sel(p){
+  return h("div",{style:{marginBottom:14}},
+    p.label?h("label",{style:{display:"block",fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:5,fontFamily:sans}},p.label):null,
+    h("select",{value:p.value,onChange:function(e){p.onChange(e.target.value)},style:{width:"100%",padding:"8px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:p.value?K.txt:K.mut,fontSize:13,fontFamily:sans,outline:"none",cursor:"pointer"}},
+      p.placeholder?h("option",{value:""},p.placeholder):null,
+      p.options.map(function(o){return h("option",{key:o,value:o},o)})
+    )
+  );
+}
+
+function Btn(p){
+  var base={padding:p.sm?"5px 10px":"8px 16px",borderRadius:6,fontSize:p.sm?11:12,fontWeight:600,fontFamily:sans,cursor:p.disabled?"not-allowed":"pointer",border:"none",transition:"all 0.15s",display:"inline-flex",alignItems:"center",gap:6,opacity:p.disabled?0.5:1,letterSpacing:"0.02em"};
+  var vs={default:{background:K.sfcH,color:K.txt},primary:{background:K.acc,color:"#fff"},danger:{background:K.errBg,color:K.err,border:"1px solid "+K.err+"33"},ghost:{background:"transparent",color:K.dim},success:{background:"rgba(74,222,128,0.1)",color:K.ok,border:"1px solid "+K.ok+"33"}};
+  var v=p.v||"default";
+  return h("button",{onClick:p.disabled?undefined:p.onClick,style:Object.assign({},base,vs[v],p.style)},p.children);
+}
+
+function Sec(p){
+  return h("div",{style:{marginBottom:24}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
+      h("h3",{style:{fontSize:13,fontWeight:700,color:K.acc,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:sans,margin:0}},p.title),
+      p.actions
+    ),
+    p.children
+  );
+}
+
+function Tabs(p){
+  return h("div",{style:{display:"flex",gap:2,marginBottom:20,borderBottom:"1px solid "+K.bdr}},
+    p.tabs.map(function(t){return h("button",{key:t.key,onClick:function(){p.onChange(t.key)},style:{padding:"8px 16px",fontSize:12,fontWeight:p.active===t.key?700:500,fontFamily:sans,color:p.active===t.key?K.acc:K.dim,background:"transparent",border:"none",borderBottom:p.active===t.key?"2px solid "+K.acc:"2px solid transparent",cursor:"pointer",transition:"all 0.15s",marginBottom:-1}},t.label)})
+  );
+}
+
+// --- Script Builder ---
+function ScriptBuilder(p){
+  var s=p.script;
+  var _e=useState({}),exp=_e[0],setExp=_e[1];
+  function toggle(n){setExp(function(prev){var o=Object.assign({},prev);o[n]=!o[n];return o})}
+  function upEp(i,f,v){var eps=s.entryPoints.map(function(e,j){return j===i?Object.assign({},e,{[f]:v}):e});p.onUpdate(Object.assign({},s,{entryPoints:eps}))}
+  return h("div",{style:{background:K.code,border:"1px solid "+K.bdr,borderRadius:8,padding:16,marginBottom:12}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        h("span",{style:{padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700,background:K.accBg,color:K.acc,fontFamily:mono,letterSpacing:"0.05em"}},(SCRIPT_TYPES[s.type]||{}).prefix||"??"),
+        h("span",{style:{fontSize:13,fontWeight:600,color:K.txt,fontFamily:sans}},s.type)
+      ),
+      h(Btn,{sm:true,v:"danger",onClick:p.onRemove},"\u2715")
+    ),
+    h(TI,{label:"Script Name",value:s.name,onChange:function(v){p.onUpdate(Object.assign({},s,{name:v}))},placeholder:"CCC | Description UE",isMono:true}),
+    h(TI,{label:"Deployed On",value:s.deployOn,onChange:function(v){p.onUpdate(Object.assign({},s,{deployOn:v}))},placeholder:"e.g., Sales Order, Invoice"}),
+    h(TI,{label:"Trigger Conditions",value:s.triggers,onChange:function(v){p.onUpdate(Object.assign({},s,{triggers:v}))},placeholder:"e.g., BeforeSubmit Create/Edit"}),
+    h("div",{style:{marginTop:12}},
+      h("label",{style:{display:"block",fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8,fontFamily:sans}},"Entry Points"),
+      s.entryPoints.map(function(ep,i){
+        return h("div",{key:ep.name,style:{marginBottom:4}},
+          h("button",{onClick:function(){toggle(ep.name)},style:{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:exp[ep.name]?K.sfcH:"transparent",border:"1px solid "+(exp[ep.name]?K.bdr:"transparent"),borderRadius:6,cursor:"pointer",color:ep.pseudo?K.ok:K.dim,fontFamily:mono,fontSize:12,transition:"all 0.15s"}},
+            h("span",null,
+              h("span",{style:{color:K.ora,marginRight:4}},"\u0192")," ",ep.name,
+              ep.pseudo?h("span",{style:{marginLeft:8,fontSize:10,color:K.ok}},"\u25CF has pseudo-code"):null
+            ),
+            h("span",{style:{fontSize:10,transform:exp[ep.name]?"rotate(180deg)":"rotate(0)",transition:"transform 0.15s"}},"\u25BC")
+          ),
+          exp[ep.name]?h("div",{style:{padding:"8px 12px 12px",borderLeft:"2px solid "+K.bdr,marginLeft:16,marginTop:4}},
+            h("p",{style:{fontSize:11,color:K.mut,fontFamily:sans,margin:"0 0 8px",lineHeight:1.5}},ep.description),
+            h("textarea",{value:ep.pseudo,onChange:function(e){upEp(i,"pseudo",e.target.value)},placeholder:"// Describe the logic...\n// e.g., Loop over line items",rows:6,style:{width:"100%",padding:"10px 12px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:12,fontFamily:mono,outline:"none",resize:"vertical",lineHeight:1.7}})
+          ):null
+        )
+      })
+    )
+  );
+}
+
+// --- Data Structure Builder ---
+function DSBuilder(p){
+  var ds=p.ds;
+  function addF(sec){var d=Object.assign({},ds);d[sec]=d[sec].concat([{name:"",id:"_ccc_",fieldType:"",notes:""}]);p.onUpdate(d)}
+  function upF(sec,i,f,v){var d=Object.assign({},ds);d[sec]=d[sec].map(function(x,j){return j===i?Object.assign({},x,{[f]:v}):x});p.onUpdate(d)}
+  function rmF(sec,i){var d=Object.assign({},ds);d[sec]=d[sec].filter(function(_,j){return j!==i});p.onUpdate(d)}
+
+  function FT(fp){
+    return h("div",{style:{overflowX:"auto"}},
+      h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12,fontFamily:sans}},
+        h("thead",null,h("tr",null,["Field Name","ID","Type","Notes",""].map(function(hd){return h("th",{key:hd,style:{padding:"6px 8px",textAlign:"left",fontSize:10,fontWeight:700,color:K.mut,textTransform:"uppercase",letterSpacing:"0.06em",borderBottom:"1px solid "+K.bdr}},hd)}))),
+        h("tbody",null,fp.fields.map(function(f,i){
+          return h("tr",{key:i},
+            h("td",{style:{padding:"4px"}},h("input",{value:f.name,onChange:function(e){upF(fp.section,i,"name",e.target.value)},placeholder:"Field name",style:{width:"100%",padding:"5px 8px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:12,fontFamily:sans,outline:"none"}})),
+            h("td",{style:{padding:"4px"}},h("input",{value:f.id,onChange:function(e){upF(fp.section,i,"id",e.target.value)},placeholder:"_ccc_",style:{width:"100%",padding:"5px 8px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:12,fontFamily:mono,outline:"none"}})),
+            h("td",{style:{padding:"4px"}},h("select",{value:f.fieldType,onChange:function(e){upF(fp.section,i,"fieldType",e.target.value)},style:{width:"100%",padding:"5px 8px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:4,color:f.fieldType?K.txt:K.mut,fontSize:12,fontFamily:sans,outline:"none"}},h("option",{value:""},"Select type"),FIELD_TYPES.map(function(t){return h("option",{key:t,value:t},t)}))),
+            h("td",{style:{padding:"4px"}},h("input",{value:f.notes,onChange:function(e){upF(fp.section,i,"notes",e.target.value)},placeholder:"Notes",style:{width:"100%",padding:"5px 8px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:12,fontFamily:sans,outline:"none"}})),
+            h("td",{style:{padding:"4px",width:30}},h(Btn,{sm:true,v:"ghost",onClick:function(){rmF(fp.section,i)},style:{color:K.err,padding:"2px 6px"}},"\u2715"))
+          )
+        }))
+      ),
+      h(Btn,{sm:true,onClick:function(){addF(fp.section)},style:{marginTop:6}},"+Add Field")
+    );
+  }
+
+  return h("div",{style:{background:K.code,border:"1px solid "+K.bdr,borderRadius:8,padding:16,marginBottom:12}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:12}},
+      h("div",{style:{flex:1}},h(Sel,{label:"Record Type",value:ds.type,onChange:function(v){p.onUpdate(Object.assign({},ds,{type:v}))},options:["standard","custom"]})),
+      h(Btn,{sm:true,v:"danger",onClick:p.onRemove,style:{marginTop:20}},"\u2715")
+    ),
+    h(TI,{label:ds.type==="custom"?"Custom Record Name":"Record Name",value:ds.recordName,onChange:function(v){p.onUpdate(Object.assign({},ds,{recordName:v}))},placeholder:"e.g., Sales Order"}),
+    ds.type==="custom"?h(TI,{label:"Custom Record ID",value:ds.customRecordId,onChange:function(v){p.onUpdate(Object.assign({},ds,{customRecordId:v}))},placeholder:"_ccc_record_id",isMono:true}):null,
+    h("div",{style:{marginTop:8}},
+      h("label",{style:{fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:sans}},"Header Fields"),
+      h(FT,{fields:ds.headerFields,section:"headerFields"})
+    ),
+    h("div",{style:{marginTop:12}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        h("label",{style:{fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:sans}},"Line Fields"),
+        ds.lineFields.length===0?h(Btn,{sm:true,onClick:function(){addF("lineFields")}},"+Add Line Fields"):null
+      ),
+      ds.lineFields.length>0?h(FT,{fields:ds.lineFields,section:"lineFields"}):null
+    )
+  );
+}
+
+// --- AI Suggestions ---
+function AISug(p){
+  var _l=useState(false),loading=_l[0],setLoading=_l[1];
+  var _s=useState(null),sug=_s[0],setSug=_s[1];
+  var _e=useState(null),err=_e[0],setErr=_e[1];
+  function go(){
+    if(!p.context&&p.requirements.every(function(r){return!r.details})){setErr("Enter context or requirements first.");return}
+    setLoading(true);setErr(null);setSug(null);
+    var rTxt=p.requirements.filter(function(r){return r.details}).map(function(r){return r.ref+": "+r.details}).join("\n");
+    var prompt="You are a NetSuite technical consultant. Based on the following context and requirements, suggest the most appropriate NetSuite customization approach.\n\nContext: "+(p.context||"Not provided")+"\n\nRequirements:\n"+(rTxt||"Not provided")+'\n\nRespond ONLY with valid JSON (no markdown, no backticks). Use this exact structure:\n{"summary":"2-3 sentence overview","suggestedScripts":[{"type":"One of: Client Script, User Event, Map/Reduce, Scheduled Script, Suitelet, Restlet, Workflow Action Script, Mass Update Script","name":"CCC naming convention","deployOn":"record","triggers":"when","reasoning":"why"}],"suggestedFields":[{"recordName":"record","fieldName":"name","fieldId":"_ccc_id","fieldType":"type","purpose":"why"}],"assumptions":["assumptions"],"considerations":["things to consider"]}';
+    fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})}).then(function(r){return r.json()}).then(function(data){
+      var txt=(data.content||[]).map(function(x){return x.text||""}).join("");
+      setSug(JSON.parse(txt.replace(/```json|```/g,"").trim()));
+      setLoading(false);
+    }).catch(function(){setErr("Failed. Please try again.");setLoading(false)});
+  }
+  return h("div",{style:{background:"linear-gradient(135deg,"+K.accBg+",rgba(245,158,11,0.04))",border:"1px solid "+K.acc+"33",borderRadius:8,padding:16,marginBottom:20}},
+    h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
+      h("span",{style:{fontSize:16}},"\u2726"),
+      h("span",{style:{fontSize:13,fontWeight:700,color:K.acc,fontFamily:sans}},"AI Solution Advisor")
+    ),
+    h("p",{style:{fontSize:12,color:K.dim,fontFamily:sans,margin:"0 0 12px",lineHeight:1.5}},"Enter context and requirements above, then get AI-powered recommendations."),
+    h(Btn,{v:"primary",onClick:go,disabled:loading},loading?"Analyzing...":"Get AI Suggestions"),
+    err?h("p",{style:{color:K.err,fontSize:12,fontFamily:sans,marginTop:8}},err):null,
+    sug?h("div",{style:{marginTop:16}},
+      h("div",{style:{background:K.bg,borderRadius:6,padding:12,marginBottom:10}},h("p",{style:{fontSize:12,color:K.txt,fontFamily:sans,lineHeight:1.6,margin:0}},sug.summary)),
+      sug.suggestedScripts&&sug.suggestedScripts.length>0?h("div",{style:{marginBottom:10}},
+        h("label",{style:{fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:sans,marginBottom:6,display:"block"}},"Suggested Scripts"),
+        sug.suggestedScripts.map(function(s,i){
+          return h("div",{key:i,style:{background:K.bg,borderRadius:6,padding:10,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+            h("div",null,
+              h("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:4}},
+                h("span",{style:{padding:"1px 6px",borderRadius:3,fontSize:10,fontWeight:700,background:K.accBg,color:K.acc,fontFamily:mono}},s.type),
+                h("span",{style:{fontSize:12,color:K.txt,fontFamily:sans,fontWeight:600}},s.name)
+              ),
+              h("p",{style:{fontSize:11,color:K.dim,fontFamily:sans,margin:"2px 0 0",lineHeight:1.4}},"Deploy: "+s.deployOn+" \u00b7 Triggers: "+s.triggers),
+              h("p",{style:{fontSize:11,color:K.mut,fontFamily:sans,margin:"2px 0 0",lineHeight:1.4}},s.reasoning)
+            ),
+            h(Btn,{sm:true,v:"success",onClick:function(){p.onApply("script",s)}},"+Add")
+          )
+        })
+      ):null,
+      sug.suggestedFields&&sug.suggestedFields.length>0?h("div",{style:{marginBottom:10}},
+        h("label",{style:{fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:sans,marginBottom:6,display:"block"}},"Suggested Fields"),
+        sug.suggestedFields.map(function(f,i){
+          return h("div",{key:i,style:{background:K.bg,borderRadius:6,padding:10,marginBottom:6}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontFamily:mono,color:K.ora}},f.fieldId),
+              h("span",{style:{fontSize:12,color:K.txt,fontFamily:sans}},f.fieldName),
+              h("span",{style:{fontSize:10,color:K.mut}},"("+f.fieldType+")")
+            ),
+            h("p",{style:{fontSize:11,color:K.dim,fontFamily:sans,margin:"2px 0 0"}},"On: "+f.recordName+" \u00b7 "+f.purpose)
+          )
+        })
+      ):null,
+      sug.considerations&&sug.considerations.length>0?h("div",{style:{background:K.bg,borderRadius:6,padding:10}},
+        h("label",{style:{fontSize:11,fontWeight:600,color:K.warn,fontFamily:sans,marginBottom:4,display:"block"}},"Considerations"),
+        sug.considerations.map(function(x,i){return h("p",{key:i,style:{fontSize:11,color:K.dim,fontFamily:sans,margin:"2px 0",lineHeight:1.4}},"\u2022 "+x)})
+      ):null
+    ):null
+  );
+}
+
+// --- Export HTML Generator ---
+function genHTML(project,tasks,estimates){
+  var th='<tr><th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5;text-align:left;">Field</th><th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5;text-align:left;">ID</th><th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5;text-align:left;">Type</th><th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5;text-align:left;">Notes</th></tr>';
+  var taskSec=tasks.map(function(t,ti){
+    var rr=t.requirements.map(function(r){return'<tr><td style="padding:6px 10px;border:1px solid #ddd;font-weight:600;width:70px;">'+r.ref+'</td><td style="padding:6px 10px;border:1px solid #ddd;">'+(r.details||"")+"</td></tr>"}).join("");
+    var ar=t.assumptions.map(function(a){return'<tr><td style="padding:6px 10px;border:1px solid #ddd;font-weight:600;width:70px;">'+a.ref+'</td><td style="padding:6px 10px;border:1px solid #ddd;">'+(a.details||"")+"</td></tr>"}).join("");
+    var dsh=t.dataStructures.map(function(ds){
+      var hR=ds.headerFields.map(function(f){return'<tr><td style="padding:4px 8px;border:1px solid #ddd;">'+f.name+'</td><td style="padding:4px 8px;border:1px solid #ddd;font-family:monospace;">'+f.id+'</td><td style="padding:4px 8px;border:1px solid #ddd;">'+f.fieldType+'</td><td style="padding:4px 8px;border:1px solid #ddd;">'+f.notes+"</td></tr>"}).join("");
+      var lR=ds.lineFields.map(function(f){return'<tr><td style="padding:4px 8px;border:1px solid #ddd;">'+f.name+'</td><td style="padding:4px 8px;border:1px solid #ddd;font-family:monospace;">'+f.id+'</td><td style="padding:4px 8px;border:1px solid #ddd;">'+f.fieldType+'</td><td style="padding:4px 8px;border:1px solid #ddd;">'+f.notes+"</td></tr>"}).join("");
+      var title=ds.type==="custom"?'Custom Record: <strong>'+(ds.recordName||"Unnamed")+"</strong> (ID: "+(ds.customRecordId||"_ccc_")+")":"Record: <strong>"+(ds.recordName||"Unnamed")+"</strong>";
+      return'<div style="margin-bottom:12px;"><p style="font-weight:600;margin:0 0 6px;">'+title+"</p>"+(hR?'<p style="font-size:11px;font-weight:600;color:#666;margin:4px 0;">Header Fields</p><table style="width:100%;border-collapse:collapse;font-size:12px;">'+th+hR+"</table>":"")+(lR?'<p style="font-size:11px;font-weight:600;color:#666;margin:8px 0 4px;">Line Fields</p><table style="width:100%;border-collapse:collapse;font-size:12px;">'+th+lR+"</table>":"")+"</div>"
+    }).join("");
+    var scr=t.scripts.map(function(s){
+      var ep=s.entryPoints.filter(function(e){return e.pseudo}).map(function(e){return'<div style="margin:6px 0 6px 16px;padding-left:10px;border-left:2px solid #ddd;"><code style="color:#e67e22;font-size:12px;">'+e.name+'</code><pre style="background:#f8f8f8;padding:8px;border-radius:4px;font-size:11px;margin:4px 0;white-space:pre-wrap;">'+e.pseudo+"</pre></div>"}).join("");
+      return'<div style="margin-bottom:12px;padding:10px;background:#f9f9fb;border-radius:6px;border:1px solid #eee;"><p style="margin:0 0 4px;"><strong>'+s.name+'</strong> <span style="font-size:11px;color:#888;">('+s.type+')</span></p><p style="margin:0;font-size:12px;color:#555;">Deployed on: '+(s.deployOn||"N/A")+" \u00b7 Triggers: "+(s.triggers||"N/A")+"</p>"+ep+"</div>"
+    }).join("");
+    return'<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Task '+(ti+1)+": "+t.name+'</h2><h3 style="color:#555;margin-top:16px;">Context</h3><p>'+(t.context||"\u2014")+'</p><h3 style="color:#555;">Requirements</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+rr+'</table><h3 style="color:#555;">Assumptions/Limitations</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+ar+'</table><h3 style="color:#555;">Solution</h3><p>'+(t.solutionOverview||"\u2014")+"</p>"+(dsh?'<h3 style="color:#555;">Data Structure</h3>'+dsh:"")+(scr?'<h3 style="color:#555;">Scripts</h3>'+scr:"")+"</div>"
+  }).join("");
+  var er=estimates.map(function(e){return'<tr><td style="padding:6px 10px;border:1px solid #ddd;">'+e.task+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.min||"\u2014")+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.max||"\u2014")+"</td></tr>"}).join("");
+  var tMin=estimates.reduce(function(s,e){return s+(parseFloat(e.min)||0)},0);
+  var tMax=estimates.reduce(function(s,e){return s+(parseFloat(e.max)||0)},0);
+  return'<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;color:#2c3e50;max-width:800px;margin:0 auto;padding:40px;line-height:1.6;font-size:13px;}h1{text-align:center;}h2{color:#2c3e50;}h3{color:#555;font-size:14px;margin-top:16px;}</style></head><body><h1>'+(project.title||"Solution Design")+'</h1><p style="text-align:center;color:#888;">Prepared for: '+(project.customer||"\u2014")+"<br>Version "+(project.version||"1.0")+" \u00b7 "+(project.date||new Date().toLocaleDateString())+"</p>"+taskSec+'<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Deployment</h2><p>'+(project.deployment||"All development will be done in sandbox.")+'</p><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Estimate</h2><table style="width:100%;border-collapse:collapse;font-size:13px;"><tr><th style="padding:8px 10px;border:1px solid #ddd;background:#f5f5f5;text-align:left;">Task</th><th style="padding:8px 10px;border:1px solid #ddd;background:#f5f5f5;text-align:center;">Min Hours</th><th style="padding:8px 10px;border:1px solid #ddd;background:#f5f5f5;text-align:center;">Max Hours</th></tr>'+er+'<tr style="font-weight:700;background:#f0f4ff;"><td style="padding:8px 10px;border:1px solid #ddd;">Total</td><td style="padding:8px 10px;border:1px solid #ddd;text-align:center;">'+(tMin||"\u2014")+'</td><td style="padding:8px 10px;border:1px solid #ddd;text-align:center;">'+(tMax||"\u2014")+"</td></tr></table></div></body></html>"
+}
+
+// --- Landing Page ---
+function Landing(p){
+  var _d=useState(false),drag=_d[0],setDrag=_d[1];
+  var ref=useRef(null);
+  function load(file){
+    if(!file||!file.name.endsWith(".json"))return;
+    var r=new FileReader();
+    r.onload=function(e){try{var d=JSON.parse(e.target.result);if(d.project&&d.tasks)p.onOpen(d);else alert("Invalid solution file.")}catch(x){alert("Could not parse file.")}};
+    r.readAsText(file);
+  }
+  function hoverOn(e){e.currentTarget.style.borderColor=K.acc;e.currentTarget.style.background=K.accBg}
+  function hoverOff(e){e.currentTarget.style.borderColor=K.bdr;e.currentTarget.style.background=K.sfc}
+  return h("div",{style:{height:"100vh",background:K.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:sans}},
+    h("div",{style:{width:560,maxWidth:"90vw"}},
+      h("div",{style:{textAlign:"center",marginBottom:40}},
+        h("div",{style:{display:"inline-flex",alignItems:"center",gap:12,marginBottom:8}},
+          h("span",{style:{fontSize:32,fontWeight:800,color:K.acc,fontFamily:mono}},"NS"),
+          h("span",{style:{fontSize:24,fontWeight:700,color:K.txt}},"Solution Builder")
+        ),
+        h("p",{style:{fontSize:13,color:K.dim,margin:0}},"NetSuite Technical Design & Solutioning Tool")
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}},
+        h("button",{onClick:p.onNew,style:{padding:"24px 20px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s"},onMouseEnter:hoverOn,onMouseLeave:hoverOff},
+          h("div",{style:{fontSize:22,marginBottom:8,color:K.acc}},"+"),
+          h("div",{style:{fontSize:14,fontWeight:700,color:K.txt,marginBottom:4}},"New Solution"),
+          h("div",{style:{fontSize:11,color:K.dim,lineHeight:1.4}},"Start a fresh solution design from scratch")
+        ),
+        h("button",{onClick:function(){ref.current&&ref.current.click()},style:{padding:"24px 20px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s"},onMouseEnter:hoverOn,onMouseLeave:hoverOff},
+          h("div",{style:{fontSize:22,marginBottom:8,color:K.acc}},"\u2191"),
+          h("div",{style:{fontSize:14,fontWeight:700,color:K.txt,marginBottom:4}},"Open Solution"),
+          h("div",{style:{fontSize:11,color:K.dim,lineHeight:1.4}},"Load a .json solution file from SharePoint or local")
+        )
+      ),
+      h("div",{onDragOver:function(e){e.preventDefault();setDrag(true)},onDragLeave:function(){setDrag(false)},onDrop:function(e){e.preventDefault();setDrag(false);load(e.dataTransfer.files[0])},onClick:function(){ref.current&&ref.current.click()},style:{padding:"32px 20px",border:"2px dashed "+(drag?K.acc:K.bdr),borderRadius:10,background:drag?K.accBg:"transparent",textAlign:"center",transition:"all 0.2s",cursor:"pointer"}},
+        h("p",{style:{fontSize:13,color:drag?K.acc:K.dim,margin:"0 0 4px",fontWeight:600}},drag?"Drop to open":"Drag & drop a .json solution file here"),
+        h("p",{style:{fontSize:11,color:K.mut,margin:0}},"or click to browse")
+      ),
+      h("input",{ref:ref,type:"file",accept:".json",style:{display:"none"},onChange:function(e){load(e.target.files[0]);e.target.value=""}}),
+      h("div",{style:{textAlign:"center",marginTop:32}},
+        h("p",{style:{fontSize:11,color:K.mut,lineHeight:1.5}},"Solutions are saved as portable .json files you can store in SharePoint, share with teammates, or version-control in Git.")
+      )
+    )
+  );
+}
+
+// --- Main App ---
+function App(){
+  var _sol=useState(null),sol=_sol[0],setSol=_sol[1];
+  var _aTi=useState(0),aTi=_aTi[0],setATi=_aTi[1];
+  var _aTab=useState("context"),aTab=_aTab[0],setATab=_aTab[1];
+  var _view=useState("build"),view=_view[0],setView=_view[1];
+  var _showPv=useState(false),showPv=_showPv[0],setShowPv=_showPv[1];
+  var _expHtml=useState(""),expHtml=_expHtml[0],setExpHtml=_expHtml[1];
+  var _flash=useState(false),flash=_flash[0],setFlash=_flash[1];
+  var ifr=useRef(null);
+  var flRef=useRef(null);
+
+  var proj=sol?sol.project:null;
+  var tasks=sol?sol.tasks:[];
+  var ests=sol?sol.estimates:[];
+  var task=tasks[aTi];
+
+  function setProj(p){setSol(function(s){return Object.assign({},s,{project:p})})}
+  function setTasks(fn){setSol(function(s){return Object.assign({},s,{tasks:typeof fn==="function"?fn(s.tasks):fn})})}
+  function setEsts(fn){setSol(function(s){return Object.assign({},s,{estimates:typeof fn==="function"?fn(s.estimates):fn})})}
+
+  var upTask=useCallback(function(f,v){setTasks(function(p){return p.map(function(t,i){if(i!==aTi)return t;var o=Object.assign({},t);o[f]=v;return o})});},[aTi]);
+
+  function addTask(){
+    var nt=mkTask(tasks.length);
+    setTasks(function(p){return p.concat([nt])});
+    setEsts(function(p){
+      var te=p.filter(function(e){return e.task!=="Testing"&&e.task!=="Training"&&e.task!=="Requirement Gathering/Scoping"});
+      var me=p.filter(function(e){return e.task==="Testing"||e.task==="Training"||e.task==="Requirement Gathering/Scoping"});
+      return me.filter(function(e){return e.task==="Requirement Gathering/Scoping"}).concat(te).concat([{task:nt.name,min:"",max:""}]).concat(me.filter(function(e){return e.task!=="Requirement Gathering/Scoping"}));
+    });
+    setATi(tasks.length);
+  }
+
+  function rmTask(idx){
+    if(tasks.length<=1)return;
+    var rm=tasks[idx];
+    setTasks(function(p){return p.filter(function(_,i){return i!==idx})});
+    setEsts(function(p){return p.filter(function(e){return e.task!==rm.name})});
+    if(aTi>=idx&&aTi>0)setATi(aTi-1);
+  }
+
+  function addScr(type){var s=mkScript(type);upTask("scripts",task.scripts.concat([s]))}
+  function applySug(type,data){
+    if(type==="script"&&SCRIPT_TYPES[data.type]){var s=mkScript(data.type);s.name=data.name||s.name;s.deployOn=data.deployOn||"";s.triggers=data.triggers||"";upTask("scripts",task.scripts.concat([s]))}
+  }
+
+  function saveJson(){
+    var payload=Object.assign({},sol,{savedAt:new Date().toISOString()});
+    var json=JSON.stringify(payload,null,2);
+    var blob=new Blob([json],{type:"application/json"});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement("a");a.href=url;a.download=((proj&&proj.title?proj.title:"Solution").replace(/[^a-zA-Z0-9 _-]/g,"").replace(/\s+/g,"-"))+".json";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+    setFlash(true);setTimeout(function(){setFlash(false)},2000);
+  }
+
+  function loadJson(file){
+    if(!file)return;
+    var r=new FileReader();
+    r.onload=function(e){try{var d=JSON.parse(e.target.result);if(d.project&&d.tasks){setSol(d);setATi(0);setATab("context");setView("build");setShowPv(false)}else{alert("Invalid file.")}}catch(x){alert("Could not parse.")}};
+    r.readAsText(file);
+  }
+
+  function preview(){setExpHtml(genHTML(proj,tasks,ests));setShowPv(true)}
+
+  useEffect(function(){
+    if(!sol)return;
+    setEsts(function(p){var n=p.slice();tasks.forEach(function(t){if(!n.find(function(e){return e.task===t.name})){var i=n.findIndex(function(e){return e.task==="Testing"});if(i>=0)n.splice(i,0,{task:t.name,min:"",max:""});else n.push({task:t.name,min:"",max:""})}});return n});
+  },[tasks.length]);
+
+  if(!sol)return h(Landing,{onNew:function(){setSol(mkSolution());setATi(0);setView("build");setATab("context")},onOpen:function(d){setSol(d);setATi(0);setView("build");setATab("context")}});
+
+  // --- Editor Layout ---
+  return h("div",{style:{display:"flex",height:"100vh",background:K.bg,color:K.txt,fontFamily:sans,overflow:"hidden"}},
+    // Sidebar
+    h("div",{style:{width:250,background:K.sfc,borderRight:"1px solid "+K.bdr,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden"}},
+      h("div",{style:{padding:"14px 14px 8px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+        h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+          h("span",{style:{fontSize:18,fontWeight:800,color:K.acc,fontFamily:mono}},"NS"),
+          h("span",{style:{fontSize:13,fontWeight:700,color:K.txt}},"Solution Builder")
+        ),
+        h(Btn,{sm:true,v:"ghost",onClick:function(){setSol(null)},style:{fontSize:10,color:K.dim}},"\u2190 Home")
+      ),
+      h("div",{style:{padding:"4px 14px 8px"}},
+        h(TI,{label:"Project Title",value:proj.title,onChange:function(v){setProj(Object.assign({},proj,{title:v}))},placeholder:"Project Title"}),
+        h(TI,{label:"Customer",value:proj.customer,onChange:function(v){setProj(Object.assign({},proj,{customer:v}))},placeholder:"Customer Name"}),
+        h(TI,{label:"Version",value:proj.version,onChange:function(v){setProj(Object.assign({},proj,{version:v}))},placeholder:"1.0"})
+      ),
+      h("div",{style:{padding:"8px 14px",borderTop:"1px solid "+K.bdr,flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
+          h("span",{style:{fontSize:10,fontWeight:700,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em"}},"Tasks"),
+          h(Btn,{sm:true,onClick:addTask},"+")
+        ),
+        h("div",{style:{overflowY:"auto",flex:1}},
+          tasks.map(function(t,i){
+            return h("div",{key:t.id,onClick:function(){setATi(i);setView("build")},style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",borderRadius:6,marginBottom:2,cursor:"pointer",background:aTi===i&&view==="build"?K.accBg:"transparent",border:aTi===i&&view==="build"?"1px solid "+K.acc+"33":"1px solid transparent",transition:"all 0.1s"}},
+              h("input",{value:t.name,onChange:function(e){var val=e.target.value;setTasks(function(p){return p.map(function(tk,j){if(j===i){setEsts(function(es){return es.map(function(x){return x.task===tk.name?Object.assign({},x,{task:val}):x})});return Object.assign({},tk,{name:val})}return tk})})},onClick:function(e){e.stopPropagation()},style:{background:"transparent",border:"none",color:K.txt,fontSize:12,fontFamily:sans,fontWeight:500,outline:"none",width:"100%",padding:0}}),
+              tasks.length>1?h(Btn,{sm:true,v:"ghost",onClick:function(e){e.stopPropagation();rmTask(i)},style:{padding:"0 4px",color:K.mut,fontSize:10}},"\u2715"):null
+            )
+          })
+        )
+      ),
+      h("div",{style:{padding:"10px 14px",borderTop:"1px solid "+K.bdr}},
+        h(Btn,{onClick:function(){setView("estimate")},style:{width:"100%",justifyContent:"center",marginBottom:5,background:view==="estimate"?K.accBg:K.sfcH,color:view==="estimate"?K.acc:K.txt,fontSize:11}},"Hours Estimate"),
+        h(Btn,{onClick:function(){setView("export");setShowPv(false)},style:{width:"100%",justifyContent:"center",marginBottom:5,background:view==="export"?K.accBg:K.sfcH,color:view==="export"?K.acc:K.txt,fontSize:11}},"Export Document"),
+        h("div",{style:{display:"flex",gap:5}},
+          h(Btn,{v:"primary",onClick:saveJson,style:{flex:1,justifyContent:"center",fontSize:11,transition:"all 0.3s",background:flash?K.ok:K.acc}},flash?"\u2713 Saved!":"\u2193 Save .json"),
+          h(Btn,{onClick:function(){flRef.current&&flRef.current.click()},style:{flex:1,justifyContent:"center",fontSize:11}},"\u2191 Load .json")
+        ),
+        h("input",{ref:flRef,type:"file",accept:".json",style:{display:"none"},onChange:function(e){loadJson(e.target.files[0]);e.target.value=""}})
+      )
+    ),
+    // Main content
+    h("div",{style:{flex:1,overflowY:"auto",padding:"24px 32px"}},
+      // Build view
+      view==="build"&&task?h(F,null,
+        h("h2",{style:{fontSize:20,fontWeight:700,margin:"0 0 4px",fontFamily:sans}},task.name),
+        h("p",{style:{fontSize:12,color:K.mut,margin:"0 0 16px"}},"Define context, requirements, data structure, and scripts."),
+        h(Tabs,{tabs:[{key:"context",label:"Context & Reqs"},{key:"solution",label:"Solution"},{key:"data",label:"Data Structure"},{key:"scripts",label:"Scripts"}],active:aTab,onChange:setATab}),
+
+        aTab==="context"?h(F,null,
+          h(AISug,{context:task.context,requirements:task.requirements,onApply:applySug}),
+          h(Sec,{title:"Context"},h(TI,{value:task.context,onChange:function(v){upTask("context",v)},placeholder:"Who is the customer? Why is this customization needed?...",multi:true,rows:4})),
+          h(Sec,{title:"Requirements",actions:h(Btn,{sm:true,onClick:function(){upTask("requirements",task.requirements.concat([{ref:"REQ-"+String(task.requirements.length+1).padStart(2,"0"),type:"user",details:""}]))}},"+Add")},
+            task.requirements.map(function(r,i){
+              return h("div",{key:i,style:{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}},
+                h("span",{style:{padding:"7px 0",fontSize:11,fontWeight:700,color:K.acc,fontFamily:mono,minWidth:52}},r.ref),
+                h("select",{value:r.type,onChange:function(e){upTask("requirements",task.requirements.map(function(x,j){return j===i?Object.assign({},x,{type:e.target.value}):x}))},style:{padding:"7px 8px",background:K.code,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:11,fontFamily:sans,width:80}},h("option",{value:"user"},"User"),h("option",{value:"system"},"System")),
+                h("textarea",{value:r.details,onChange:function(e){upTask("requirements",task.requirements.map(function(x,j){return j===i?Object.assign({},x,{details:e.target.value}):x}))},placeholder:r.type==="user"?"As a [persona], I [want to], [so that]...":"The system must...",rows:2,style:{flex:1,padding:"7px 10px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:12,fontFamily:sans,outline:"none",resize:"vertical",lineHeight:1.5}}),
+                task.requirements.length>1?h(Btn,{sm:true,v:"ghost",onClick:function(){upTask("requirements",task.requirements.filter(function(_,j){return j!==i}))},style:{color:K.err,marginTop:4}},"\u2715"):null
+              )
+            })
+          ),
+          h(Sec,{title:"Assumptions / Limitations",actions:h(Btn,{sm:true,onClick:function(){upTask("assumptions",task.assumptions.concat([{ref:"ASM-"+String(task.assumptions.length+1).padStart(2,"0"),details:""}]))}},"+Add")},
+            task.assumptions.map(function(a,i){
+              return h("div",{key:i,style:{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}},
+                h("span",{style:{padding:"7px 0",fontSize:11,fontWeight:700,color:K.ora,fontFamily:mono,minWidth:52}},a.ref),
+                h("textarea",{value:a.details,onChange:function(e){upTask("assumptions",task.assumptions.map(function(x,j){return j===i?Object.assign({},x,{details:e.target.value}):x}))},placeholder:"Known limitation or assumption...",rows:1,style:{flex:1,padding:"7px 10px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:12,fontFamily:sans,outline:"none",resize:"vertical",lineHeight:1.5}}),
+                task.assumptions.length>1?h(Btn,{sm:true,v:"ghost",onClick:function(){upTask("assumptions",task.assumptions.filter(function(_,j){return j!==i}))},style:{color:K.err,marginTop:4}},"\u2715"):null
+              )
+            })
+          )
+        ):null,
+        aTab==="solution"?h(Sec,{title:"Solution Overview"},
+          h(TI,{value:task.solutionOverview,onChange:function(v){upTask("solutionOverview",v)},placeholder:"Explain the solution approach.",multi:true,rows:6}),
+          h(TI,{label:"Diagrams / Notes",value:task.diagrams,onChange:function(v){upTask("diagrams",v)},placeholder:"Reference any supporting diagrams...",multi:true,rows:3})
+        ):null,
+        aTab==="data"?h(Sec,{title:"Data Structure",actions:h(Btn,{sm:true,onClick:function(){upTask("dataStructures",task.dataStructures.concat([{id:Date.now(),recordName:"",type:"standard",customRecordId:"",headerFields:[{name:"",id:"_ccc_",fieldType:"",notes:""}],lineFields:[]}]))}},"+Add Record")},
+          task.dataStructures.map(function(ds,i){return h(DSBuilder,{key:ds.id,ds:ds,onUpdate:function(u){upTask("dataStructures",task.dataStructures.map(function(d,j){return j===i?u:d}))},onRemove:function(){upTask("dataStructures",task.dataStructures.filter(function(_,j){return j!==i}))}})})
+        ):null,
+        aTab==="scripts"?h(F,null,
+          h(Sec,{title:"Add Script"},h("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},Object.keys(SCRIPT_TYPES).map(function(type){return h(Btn,{key:type,sm:true,onClick:function(){addScr(type)}},h("span",{style:{color:K.acc,fontFamily:mono,fontSize:10,fontWeight:700}},SCRIPT_TYPES[type].prefix)," ",type)}))),
+          task.scripts.length===0?h("div",{style:{textAlign:"center",padding:"40px 20px",color:K.mut}},h("p",{style:{fontSize:14,margin:"0 0 6px"}},"No scripts added yet"),h("p",{style:{fontSize:12}},"Select a script type above or use the AI Advisor.")):null,
+          task.scripts.map(function(s,i){return h(ScriptBuilder,{key:s.id,script:s,onUpdate:function(u){upTask("scripts",task.scripts.map(function(x,j){return j===i?u:x}))},onRemove:function(){upTask("scripts",task.scripts.filter(function(_,j){return j!==i}))}})})
+        ):null
+      ):null,
+
+      // Estimate view
+      view==="estimate"?h(F,null,
+        h("h2",{style:{fontSize:20,fontWeight:700,margin:"0 0 4px"}},"Hours Estimate"),
+        h("p",{style:{fontSize:12,color:K.mut,margin:"0 0 20px"}},"Provide min and max hour estimates for each task."),
+        h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+          h("thead",null,h("tr",null,["Task","Min Hours","Max Hours",""].map(function(hd){return h("th",{key:hd,style:{padding:"10px 12px",textAlign:hd==="Task"?"left":"center",fontSize:10,fontWeight:700,color:K.mut,textTransform:"uppercase",letterSpacing:"0.06em",borderBottom:"2px solid "+K.bdr}},hd)}))),
+          h("tbody",null,
+            ests.map(function(e,i){
+              return h("tr",{key:i,style:{borderBottom:"1px solid "+K.bdr}},
+                h("td",{style:{padding:"8px 12px"}},h("input",{value:e.task,onChange:function(ev){setEsts(function(p){return p.map(function(x,j){return j===i?Object.assign({},x,{task:ev.target.value}):x})})},style:{background:"transparent",border:"none",color:K.txt,fontSize:13,fontFamily:sans,outline:"none",width:"100%"}})),
+                h("td",{style:{padding:"8px 12px",textAlign:"center"}},h("input",{type:"number",value:e.min,onChange:function(ev){setEsts(function(p){return p.map(function(x,j){return j===i?Object.assign({},x,{min:ev.target.value}):x})})},placeholder:"\u2014",style:{width:60,textAlign:"center",padding:"5px 8px",background:K.code,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:13,fontFamily:mono,outline:"none"}})),
+                h("td",{style:{padding:"8px 12px",textAlign:"center"}},h("input",{type:"number",value:e.max,onChange:function(ev){setEsts(function(p){return p.map(function(x,j){return j===i?Object.assign({},x,{max:ev.target.value}):x})})},placeholder:"\u2014",style:{width:60,textAlign:"center",padding:"5px 8px",background:K.code,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:13,fontFamily:mono,outline:"none"}})),
+                h("td",{style:{padding:"8px 12px",width:30}},h(Btn,{sm:true,v:"ghost",onClick:function(){setEsts(function(p){return p.filter(function(_,j){return j!==i})})},style:{color:K.err,padding:"2px 6px"}},"\u2715"))
+              )
+            }),
+            h("tr",{style:{background:K.accBg}},
+              h("td",{style:{padding:"10px 12px",fontWeight:700}},"Total"),
+              h("td",{style:{padding:"10px 12px",textAlign:"center",fontWeight:700,fontFamily:mono,color:K.acc}},ests.reduce(function(s,e){return s+(parseFloat(e.min)||0)},0)||"\u2014"),
+              h("td",{style:{padding:"10px 12px",textAlign:"center",fontWeight:700,fontFamily:mono,color:K.acc}},ests.reduce(function(s,e){return s+(parseFloat(e.max)||0)},0)||"\u2014"),
+              h("td",null)
+            )
+          )
+        ),
+        h(Btn,{sm:true,onClick:function(){setEsts(function(p){return p.concat([{task:"",min:"",max:""}])})},style:{marginTop:8}},"+Add Row")
+      ):null,
+
+      // Export view
+      view==="export"?h(F,null,
+        h("h2",{style:{fontSize:20,fontWeight:700,margin:"0 0 4px"}},"Export Document"),
+        h("p",{style:{fontSize:12,color:K.mut,margin:"0 0 20px"}},"Preview your solution and print/save as PDF."),
+        h(Sec,{title:"Deployment Notes"},h(TI,{value:proj.deployment,onChange:function(v){setProj(Object.assign({},proj,{deployment:v}))},placeholder:"All development will be done in sandbox.",multi:true,rows:3})),
+        h("div",{style:{background:K.sfc,borderRadius:8,border:"1px solid "+K.bdr,padding:20,marginBottom:20}},
+          h("h3",{style:{fontSize:14,fontWeight:700,margin:"0 0 12px",color:K.txt}},"Document Summary"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:12}},
+            h("div",null,h("span",{style:{color:K.mut}},"Project: "),h("span",{style:{color:K.txt,fontWeight:600}},proj.title||"Untitled")),
+            h("div",null,h("span",{style:{color:K.mut}},"Customer: "),h("span",{style:{color:K.txt,fontWeight:600}},proj.customer||"\u2014")),
+            h("div",null,h("span",{style:{color:K.mut}},"Tasks: "),h("span",{style:{color:K.txt,fontWeight:600}},tasks.length)),
+            h("div",null,h("span",{style:{color:K.mut}},"Scripts: "),h("span",{style:{color:K.txt,fontWeight:600}},tasks.reduce(function(s,t){return s+t.scripts.length},0))),
+            h("div",null,h("span",{style:{color:K.mut}},"Hours: "),h("span",{style:{color:K.acc,fontWeight:600,fontFamily:mono}},(ests.reduce(function(s,e){return s+(parseFloat(e.min)||0)},0)||"?")+" \u2013 "+(ests.reduce(function(s,e){return s+(parseFloat(e.max)||0)},0)||"?")))
+          )
+        ),
+        h("div",{style:{display:"flex",gap:10,marginBottom:16}},
+          !showPv?h(Btn,{v:"primary",onClick:preview,style:{padding:"12px 24px",fontSize:14}},"Generate Preview"):h(F,null,
+            h(Btn,{v:"primary",onClick:function(){ifr.current&&ifr.current.contentWindow&&ifr.current.contentWindow.print()},style:{padding:"12px 24px",fontSize:14}},"\ud83d\udda8 Print / Save as PDF"),
+            h(Btn,{onClick:preview,style:{padding:"12px 24px",fontSize:14}},"\u21bb Refresh"),
+            h(Btn,{onClick:function(){navigator.clipboard.writeText(genHTML(proj,tasks,ests)).catch(function(){})},style:{padding:"12px 24px",fontSize:14}},"Copy HTML")
+          )
+        ),
+        !showPv?h("p",{style:{fontSize:11,color:K.mut}},'Click "Generate Preview" to see your document. Use "Print / Save as PDF" to export.'):null,
+        showPv?h("div",{style:{borderRadius:8,overflow:"hidden",border:"1px solid "+K.bdr,background:"#fff"}},
+          h("div",{style:{background:K.sfc,padding:"8px 12px",borderBottom:"1px solid "+K.bdr,display:"flex",alignItems:"center",gap:8}},
+            h("div",{style:{width:10,height:10,borderRadius:"50%",background:K.err}}),
+            h("div",{style:{width:10,height:10,borderRadius:"50%",background:K.warn}}),
+            h("div",{style:{width:10,height:10,borderRadius:"50%",background:K.ok}}),
+            h("span",{style:{fontSize:11,color:K.mut,marginLeft:8,fontFamily:mono}},"Document Preview")
+          ),
+          h("iframe",{ref:ifr,srcDoc:expHtml,style:{width:"100%",height:600,border:"none",background:"#fff"},title:"Preview"})
+        ):null
+      ):null
+    )
+  );
+}
+
+var root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(h(App,null));
+</script>
+</body>
+</html>
