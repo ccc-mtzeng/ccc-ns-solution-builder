@@ -1006,22 +1006,60 @@ Here is the document to parse:
 
     // Build system prompt with context
     function buildSystemPrompt() {
-      var parts = ["You are a senior NetSuite technical consultant at CrossCountry Consulting (CCC). You help design NetSuite customization solutions including SuiteScript, custom records, fields, workflows, and saved searches."];
-      parts.push("Respond with detailed technical recommendations. When suggesting a full solution design, output valid JSON matching the solution builder schema (with project, tasks, estimates).");
-      if(customer) parts.push("\nCurrent customer: "+customer);
+      var parts = [];
+      parts.push("You are a senior NetSuite technical consultant at CrossCountry Consulting (CCC). You help design NetSuite customization solutions including SuiteScript 2.x, custom records, fields, workflows, and saved searches.");
+      parts.push("");
+      parts.push("CRITICAL GUIDELINES:");
+      parts.push("1. ALWAYS check the existing account objects below before suggesting new scripts or fields. If an existing script already deploys on the same record and has a relevant entry point, recommend MODIFYING that script rather than creating a new one. Multiple scripts on the same record and trigger cause performance issues and governance conflicts.");
+      parts.push("2. When recommending updates to existing scripts, reference the specific script ID and explain what changes are needed (new logic in which entry point, new helper functions, etc.).");
+      parts.push("3. Only recommend a NEW script when: (a) no existing script covers the needed record + trigger combination, (b) the existing script is too complex and a separate concern is justified, or (c) the script type needed (e.g., Map/Reduce, Scheduled) doesn't exist yet for this purpose.");
+      parts.push("4. For custom fields, check if a similar field already exists before suggesting a new one. Reuse existing fields when the purpose overlaps.");
+      parts.push("5. Follow CCC naming conventions: scripts = 'CCC | Description TYPE', field IDs = '_ccc_fieldname', custom record IDs = '_ccc_recordname'.");
+      parts.push("6. When outputting a full solution design, use valid JSON matching the solution builder schema (with project, tasks, estimates). Include technicalNotes for library files or unconventional structures.");
+      parts.push("");
+      if(customer) parts.push("Customer: "+customer);
       if(contextSummary) {
         var cs = contextSummary;
-        if(cs.scripts.length>0) parts.push("\nExisting scripts in account ("+cs.scripts.length+" total):\n"+cs.scripts.map(function(s){return "- "+s.id+" ("+s.type+") deployed on: "+(s.deployOn||"N/A");}).join("\n"));
-        if(cs.fields.length>0) parts.push("\nExisting custom fields ("+cs.fields.length+" total):\n"+cs.fields.map(function(f){return "- "+f.id+" ("+f.type+") on "+f.record+": "+f.label;}).join("\n"));
-        if(cs.records.length>0) parts.push("\nExisting custom records:\n"+cs.records.map(function(r){return "- "+r.id+": "+r.name;}).join("\n"));
-        if(cs.designs.length>0) parts.push("\nPrevious solution designs:\n"+cs.designs.map(function(d){return "- "+d.title+" v"+d.version+" ("+d.status+")";}).join("\n"));
+        if(cs.scripts.length>0) {
+          parts.push("");
+          parts.push("=== EXISTING SCRIPTS IN ACCOUNT ("+cs.scripts.length+") ===");
+          parts.push("Review these carefully before suggesting new scripts.");
+          cs.scripts.forEach(function(s){
+            parts.push("  Script: "+s.id);
+            parts.push("    Name: "+(s.name||"N/A"));
+            parts.push("    Type: "+s.type);
+            parts.push("    Deployed on: "+(s.deployOn||"N/A"));
+            if(s.filePath) parts.push("    File: "+s.filePath);
+          });
+        }
+        if(cs.fields.length>0) {
+          parts.push("");
+          parts.push("=== EXISTING CUSTOM FIELDS ("+cs.fields.length+") ===");
+          cs.fields.forEach(function(f){
+            parts.push("  "+f.id+" | "+f.label+" | Type: "+f.type+" | On: "+f.record);
+          });
+        }
+        if(cs.records.length>0) {
+          parts.push("");
+          parts.push("=== EXISTING CUSTOM RECORDS ("+cs.records.length+") ===");
+          cs.records.forEach(function(r){ parts.push("  "+r.id+": "+r.name); });
+        }
+        if(cs.designs.length>0) {
+          parts.push("");
+          parts.push("=== PREVIOUS SOLUTION DESIGNS ===");
+          cs.designs.forEach(function(d){ parts.push("  "+d.title+" v"+d.version+" ("+d.status+")"); });
+        }
       }
       if(contextFiles.length>0) {
-        parts.push("\n--- Attached source files ---");
-        contextFiles.forEach(function(f) { parts.push("\n=== "+f.path+" ===\n"+f.content); });
+        parts.push("");
+        parts.push("=== ATTACHED SOURCE FILES ("+contextFiles.length+") ===");
+        parts.push("These are actual source files from the account. Reference specific functions and line logic when recommending changes.");
+        contextFiles.forEach(function(f) { parts.push("\n--- "+f.path+" ---\n"+f.content); });
       }
       if(currentSolution) {
-        parts.push("\n--- Current solution in progress ---\n"+JSON.stringify(currentSolution,null,2));
+        parts.push("");
+        parts.push("=== CURRENT SOLUTION IN PROGRESS ===");
+        parts.push(JSON.stringify(currentSolution,null,2));
       }
       return parts.join("\n");
     }
@@ -1097,9 +1135,58 @@ Here is the document to parse:
             {/* Auto-loaded summary */}
             {contextLoading && <div style={{fontSize:10,color:K.mut,marginBottom:6}}>Loading DB context...</div>}
             {contextSummary && (
-              <div style={{fontSize:10,color:K.dim,marginBottom:8,lineHeight:1.5}}>
-                <span style={{color:K.acc}}>{contextSummary.scripts.length}</span> scripts, <span style={{color:K.acc}}>{contextSummary.fields.length}</span> fields, <span style={{color:K.acc}}>{contextSummary.records.length}</span> records from DB
-                {currentSolution && <span> · <span style={{color:K.ora}}>current solution attached</span></span>}
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:K.dim,marginBottom:6,lineHeight:1.5}}>
+                  <span style={{color:K.acc}}>{contextSummary.scripts.length}</span> scripts, <span style={{color:K.acc}}>{contextSummary.fields.length}</span> fields, <span style={{color:K.acc}}>{contextSummary.records.length}</span> records from DB
+                  {currentSolution && <span> · <span style={{color:K.ora}}>current solution attached</span></span>}
+                </div>
+                {/* Expandable script list */}
+                {contextSummary.scripts.length>0 && (
+                  <details style={{marginBottom:6}}>
+                    <summary style={{fontSize:10,fontWeight:600,color:K.acc,cursor:"pointer",marginBottom:4}}>Scripts ({contextSummary.scripts.length})</summary>
+                    <div style={{maxHeight:100,overflowY:"auto",paddingLeft:8}}>
+                      {contextSummary.scripts.map(function(s,i){return (
+                        <div key={i} style={{fontSize:9,fontFamily:mono,color:K.dim,padding:"2px 0",lineHeight:1.4}}>
+                          <span style={{color:K.txt}}>{s.id}</span> <span style={{color:K.mut}}>({s.type})</span> → {s.deployOn||"N/A"}
+                        </div>
+                      );})}
+                    </div>
+                  </details>
+                )}
+                {/* Expandable fields list */}
+                {contextSummary.fields.length>0 && (
+                  <details style={{marginBottom:6}}>
+                    <summary style={{fontSize:10,fontWeight:600,color:K.acc,cursor:"pointer",marginBottom:4}}>Fields ({contextSummary.fields.length})</summary>
+                    <div style={{maxHeight:100,overflowY:"auto",paddingLeft:8}}>
+                      {contextSummary.fields.map(function(f,i){return (
+                        <div key={i} style={{fontSize:9,fontFamily:mono,color:K.dim,padding:"2px 0",lineHeight:1.4}}>
+                          <span style={{color:K.ora}}>{f.id}</span> <span style={{color:K.txt}}>{f.label}</span> <span style={{color:K.mut}}>({f.type}) on {f.record}</span>
+                        </div>
+                      );})}
+                    </div>
+                  </details>
+                )}
+                {/* Expandable records list */}
+                {contextSummary.records.length>0 && (
+                  <details style={{marginBottom:6}}>
+                    <summary style={{fontSize:10,fontWeight:600,color:K.acc,cursor:"pointer",marginBottom:4}}>Records ({contextSummary.records.length})</summary>
+                    <div style={{maxHeight:100,overflowY:"auto",paddingLeft:8}}>
+                      {contextSummary.records.map(function(r,i){return (
+                        <div key={i} style={{fontSize:9,fontFamily:mono,color:K.dim,padding:"2px 0"}}><span style={{color:K.txt}}>{r.id}</span>: {r.name}</div>
+                      );})}
+                    </div>
+                  </details>
+                )}
+                {contextSummary.designs.length>0 && (
+                  <details style={{marginBottom:6}}>
+                    <summary style={{fontSize:10,fontWeight:600,color:K.acc,cursor:"pointer",marginBottom:4}}>Past designs ({contextSummary.designs.length})</summary>
+                    <div style={{paddingLeft:8}}>
+                      {contextSummary.designs.map(function(d,i){return (
+                        <div key={i} style={{fontSize:9,color:K.dim,padding:"2px 0"}}>{d.title} v{d.version} <span style={{color:K.mut}}>({d.status})</span></div>
+                      );})}
+                    </div>
+                  </details>
+                )}
               </div>
             )}
             {/* Attached files */}
