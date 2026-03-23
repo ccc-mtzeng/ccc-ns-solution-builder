@@ -195,6 +195,16 @@
       try { const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/actions/runs?per_page=1");
         const d = await r.json(); return d.workflow_runs&&d.workflow_runs[0]||null; } catch(e) { return null; }
     }
+    async fetchDatabase() {
+      var r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/contents/"+GH_DB_PATH+"?ref="+GH_DB_BRANCH);
+      var meta = await r.json();
+      var blobR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/blobs/"+meta.sha);
+      var blob = await blobR.json();
+      var binary = atob(blob.content.replace(/\n/g,""));
+      var bytes = new Uint8Array(binary.length);
+      for(var i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+      return bytes;
+    }
     // List files currently in sdf-exports/{customer}/
     async listSdfExports(customer) {
       try {
@@ -681,11 +691,13 @@ Here is the document to parse:
 `;
   
   // ─── Settings Modal ───
-  function SettingsModal({ show, onClose, ghClient, ghUser, onGhConnect, onGhDisconnect }) {
+  function SettingsModal({ show, onClose, ghClient, ghUser, onGhConnect, onGhDisconnect, aiKey, onAiKeyChange }) {
     const [token, setToken] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [remember, setRemember] = useState(false);
+    const [localAiKey, setLocalAiKey] = useState(aiKey||"");
+    const [aiRemember, setAiRemember] = useState(!!localStorage.getItem("anthropic_key_sdb"));
     if(!show) return null;
     function doConnect() {
       if(!token) return; setLoading(true); setError(null);
@@ -695,16 +707,23 @@ Here is the document to parse:
         onGhConnect(c, user); setError(null);
       }).catch(function(e) { setError(e.message); }).finally(function() { setLoading(false); });
     }
+    function saveAiKey() {
+      onAiKeyChange(localAiKey);
+      if(aiRemember && localAiKey) localStorage.setItem("anthropic_key_sdb",localAiKey);
+      else localStorage.removeItem("anthropic_key_sdb");
+    }
     return (
       <div style={{ position:"fixed",inset:0,zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)" }} onClick={onClose}>
-        <div style={{ width:420,maxWidth:"90vw",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:12,padding:24 }} onClick={function(e){e.stopPropagation();}}>
+        <div style={{ width:420,maxWidth:"90vw",maxHeight:"80vh",overflowY:"auto",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:12,padding:24 }} onClick={function(e){e.stopPropagation();}}>
           <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
             <h3 style={{ fontSize:15,fontWeight:700,color:K.txt,margin:0 }}>Settings</h3>
             <Btn sm v="ghost" onClick={onClose} style={{color:K.dim}}>✕</Btn>
           </div>
+
+          {/* GitHub Connection */}
           <label style={{ display:"block",fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12 }}>GitHub Repository Connection</label>
           {ghClient ? (
-            <div>
+            <div style={{marginBottom:20}}>
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"12px",background:K.code,borderRadius:8,marginBottom:12 }}>
                 <img src={ghUser.avatar_url} alt="" style={{width:28,height:28,borderRadius:"50%"}} />
                 <div style={{flex:1}}>
@@ -716,7 +735,7 @@ Here is the document to parse:
               <Btn sm v="danger" onClick={function(){onGhDisconnect();}} style={{width:"100%",justifyContent:"center"}}>Disconnect</Btn>
             </div>
           ) : (
-            <div>
+            <div style={{marginBottom:20}}>
               <input type="password" value={token} onChange={function(e){setToken(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter") doConnect();}}
                 placeholder="github_pat_..." style={{width:"100%",padding:"10px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:mono,outline:"none",marginBottom:10}} />
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
@@ -731,6 +750,19 @@ Here is the document to parse:
               </div>
             </div>
           )}
+
+          {/* Anthropic API Key */}
+          <div style={{borderTop:"1px solid "+K.bdr,paddingTop:16}}>
+            <label style={{ display:"block",fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8 }}>Anthropic API Key (for AI Advisor)</label>
+            <input type="password" value={localAiKey} onChange={function(e){setLocalAiKey(e.target.value);}}
+              placeholder="sk-ant-..." style={{width:"100%",padding:"10px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:mono,outline:"none",marginBottom:10}} />
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+              <input type="checkbox" id="airem" checked={aiRemember} onChange={function(e){setAiRemember(e.target.checked);}} style={{accentColor:K.acc}} />
+              <label htmlFor="airem" style={{fontSize:12,color:K.dim,cursor:"pointer"}}>Remember on this device</label>
+            </div>
+            <Btn onClick={saveAiKey} style={{width:"100%",justifyContent:"center"}}>{aiKey?"Update Key":"Save Key"}</Btn>
+            {aiKey && <div style={{marginTop:8,fontSize:10,color:K.ok}}>✓ API key set</div>}
+          </div>
         </div>
       </div>
     );
@@ -882,6 +914,278 @@ Here is the document to parse:
             })}
           </div>
         )}
+      </div>
+    );
+  }
+
+  // ─── AI Chat Panel ───
+  function AIChatPanel({ show, onClose, aiKey, ghClient, customer, currentSolution }) {
+    const [messages, setMessages] = useState([]);
+    const [input, setInput] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [contextFiles, setContextFiles] = useState([]); // [{path,content,size}]
+    const [contextLoading, setContextLoading] = useState(false);
+    const [contextSummary, setContextSummary] = useState(null); // from DB
+    const [showCtx, setShowCtx] = useState(false);
+    const [availableFiles, setAvailableFiles] = useState([]);
+    const [filesLoading, setFilesLoading] = useState(false);
+    const msgEnd = useRef(null);
+    const inputRef = useRef(null);
+
+    // Estimate tokens (rough: 4 chars per token)
+    function estTokens(text) { return Math.ceil((text||"").length / 4); }
+
+    var ctxTokens = contextFiles.reduce(function(s,f){return s+estTokens(f.content);},0);
+    var summaryTokens = contextSummary ? estTokens(JSON.stringify(contextSummary)) : 0;
+    var solTokens = currentSolution ? estTokens(JSON.stringify(currentSolution)) : 0;
+    var totalCtxTokens = ctxTokens + summaryTokens + solTokens;
+
+    // Auto-scroll
+    useEffect(function() { if(msgEnd.current) msgEnd.current.scrollIntoView({behavior:"smooth"}); }, [messages]);
+
+    // Load DB summary when customer changes
+    useEffect(function() {
+      if(!ghClient||!customer) { setContextSummary(null); return; }
+      setContextLoading(true);
+      // Fetch the DB and query for this customer
+      (async function() {
+        try {
+          var bytes = await ghClient.fetchDatabase();
+          var SQL = await initSqlJs({locateFile:function(f){return "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/"+f;}});
+          var db = new SQL.Database(bytes);
+          var slug = customer.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+          var scripts = db.exec("SELECT script_id,name,script_type,deploy_on,file_path FROM ns_scripts WHERE customer_id='"+slug+"'");
+          var fields = db.exec("SELECT script_id,label,field_type,record_type FROM ns_custom_fields WHERE customer_id='"+slug+"'");
+          var records = db.exec("SELECT script_id,name FROM ns_custom_records WHERE customer_id='"+slug+"'");
+          var designs = db.exec("SELECT title,version,status FROM designs WHERE customer_id='"+slug+"'");
+          setContextSummary({
+            scripts: scripts[0]?scripts[0].values.map(function(r){return {id:r[0],name:r[1],type:r[2],deployOn:r[3],filePath:r[4]};}):[],
+            fields: fields[0]?fields[0].values.map(function(r){return {id:r[0],label:r[1],type:r[2],record:r[3]};}):[],
+            records: records[0]?records[0].values.map(function(r){return {id:r[0],name:r[1]};}):[],
+            designs: designs[0]?designs[0].values.map(function(r){return {title:r[0],version:r[1],status:r[2]};}):[],
+          });
+          db.close();
+        } catch(e) { console.error("DB load:",e); setContextSummary(null); }
+        setContextLoading(false);
+      })();
+    }, [ghClient, customer]);
+
+    // Load available files list from repo
+    function loadAvailableFiles() {
+      if(!ghClient||!customer) return;
+      var slug = customer.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+      setFilesLoading(true);
+      ghClient.listSdfExports(slug).then(function(files) {
+        setAvailableFiles(files.filter(function(f){return /\.(xml|js|html|json)$/i.test(f.path);}));
+      }).catch(function(){}).finally(function(){setFilesLoading(false);});
+    }
+
+    // Fetch and attach a file
+    function attachFile(file) {
+      // Check if already attached
+      if(contextFiles.find(function(f){return f.path===file.path;})) return;
+      ghClient.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/blobs/"+file.sha).then(function(r){return r.json();}).then(function(blob) {
+        var content = atob(blob.content.replace(/\n/g,""));
+        setContextFiles(function(prev){return [...prev,{path:file.path,content:content,size:content.length}];});
+      }).catch(function(e){console.error("Fetch file:",e);});
+    }
+
+    function removeFile(path) {
+      setContextFiles(function(prev){return prev.filter(function(f){return f.path!==path;});});
+    }
+
+    // Build system prompt with context
+    function buildSystemPrompt() {
+      var parts = ["You are a senior NetSuite technical consultant at CrossCountry Consulting (CCC). You help design NetSuite customization solutions including SuiteScript, custom records, fields, workflows, and saved searches."];
+      parts.push("Respond with detailed technical recommendations. When suggesting a full solution design, output valid JSON matching the solution builder schema (with project, tasks, estimates).");
+      if(customer) parts.push("\nCurrent customer: "+customer);
+      if(contextSummary) {
+        var cs = contextSummary;
+        if(cs.scripts.length>0) parts.push("\nExisting scripts in account ("+cs.scripts.length+" total):\n"+cs.scripts.map(function(s){return "- "+s.id+" ("+s.type+") deployed on: "+(s.deployOn||"N/A");}).join("\n"));
+        if(cs.fields.length>0) parts.push("\nExisting custom fields ("+cs.fields.length+" total):\n"+cs.fields.map(function(f){return "- "+f.id+" ("+f.type+") on "+f.record+": "+f.label;}).join("\n"));
+        if(cs.records.length>0) parts.push("\nExisting custom records:\n"+cs.records.map(function(r){return "- "+r.id+": "+r.name;}).join("\n"));
+        if(cs.designs.length>0) parts.push("\nPrevious solution designs:\n"+cs.designs.map(function(d){return "- "+d.title+" v"+d.version+" ("+d.status+")";}).join("\n"));
+      }
+      if(contextFiles.length>0) {
+        parts.push("\n--- Attached source files ---");
+        contextFiles.forEach(function(f) { parts.push("\n=== "+f.path+" ===\n"+f.content); });
+      }
+      if(currentSolution) {
+        parts.push("\n--- Current solution in progress ---\n"+JSON.stringify(currentSolution,null,2));
+      }
+      return parts.join("\n");
+    }
+
+    async function sendMessage() {
+      if(!input.trim()||!aiKey||loading) return;
+      var userMsg = {role:"user",content:input.trim()};
+      var newMsgs = [...messages,userMsg];
+      setMessages(newMsgs);
+      setInput("");
+      setLoading(true);
+      try {
+        var apiMsgs = newMsgs.map(function(m){return {role:m.role,content:m.content};});
+        var res = await fetch("https://api.anthropic.com/v1/messages",{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4096,system:buildSystemPrompt(),messages:apiMsgs})
+        });
+        var data = await res.json();
+        var txt = (data.content||[]).map(function(x){return x.text||"";}).join("");
+        setMessages(function(prev){return [...prev,{role:"assistant",content:txt}];});
+      } catch(e) {
+        setMessages(function(prev){return [...prev,{role:"assistant",content:"Error: "+e.message}];});
+      }
+      setLoading(false);
+    }
+
+    if(!show) return null;
+
+    return (
+      <div style={{ width:420,minWidth:420,borderLeft:"1px solid "+K.bdr,background:K.sfc,display:"flex",flexDirection:"column",overflow:"hidden" }}>
+        {/* Header */}
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid "+K.bdr,display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:14,color:K.ora}}>✦</span>
+            <span style={{fontSize:13,fontWeight:700,color:K.txt}}>AI Advisor</span>
+            {customer && <span style={{fontSize:10,color:K.mut,fontFamily:mono}}>({customer})</span>}
+          </div>
+          <div style={{display:"flex",gap:4}}>
+            <Btn sm v="ghost" onClick={function(){setShowCtx(!showCtx);if(!showCtx&&availableFiles.length===0) loadAvailableFiles();}} style={{fontSize:10,color:showCtx?K.acc:K.dim}}>{showCtx?"Hide":"Context"}</Btn>
+            <Btn sm v="ghost" onClick={function(){setMessages([]);}} style={{fontSize:10,color:K.dim}}>Clear</Btn>
+            <Btn sm v="ghost" onClick={onClose} style={{color:K.dim}}>✕</Btn>
+          </div>
+        </div>
+
+        {/* Context panel (collapsible) */}
+        {showCtx && (
+          <div style={{ padding:"10px 14px",borderBottom:"1px solid "+K.bdr,maxHeight:240,overflowY:"auto",background:K.code }}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <span style={{fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.06em"}}>Context loaded</span>
+              <span style={{fontSize:10,fontFamily:mono,color:totalCtxTokens>80000?K.err:totalCtxTokens>40000?K.warn:K.dim}}>~{(totalCtxTokens/1000).toFixed(1)}k tokens</span>
+            </div>
+            {/* Auto-loaded summary */}
+            {contextLoading && <div style={{fontSize:10,color:K.mut,marginBottom:6}}>Loading DB context...</div>}
+            {contextSummary && (
+              <div style={{fontSize:10,color:K.dim,marginBottom:8,lineHeight:1.5}}>
+                <span style={{color:K.acc}}>{contextSummary.scripts.length}</span> scripts, <span style={{color:K.acc}}>{contextSummary.fields.length}</span> fields, <span style={{color:K.acc}}>{contextSummary.records.length}</span> records from DB
+                {currentSolution && <span> · <span style={{color:K.ora}}>current solution attached</span></span>}
+              </div>
+            )}
+            {/* Attached files */}
+            {contextFiles.length>0 && (
+              <div style={{marginBottom:8}}>
+                {contextFiles.map(function(f) {
+                  var name = f.path.split("/").pop();
+                  return (
+                    <div key={f.path} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 0"}}>
+                      <span style={{fontSize:10,fontFamily:mono,color:K.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}} title={f.path}>{name}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                        <span style={{fontSize:9,color:K.mut}}>{(f.size/1024).toFixed(1)}KB</span>
+                        <button onClick={function(){removeFile(f.path);}} style={{background:"transparent",border:"none",color:K.err,cursor:"pointer",fontSize:10,padding:"0 2px"}}>✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* File picker */}
+            <div style={{borderTop:"1px solid "+K.bdr,paddingTop:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <span style={{fontSize:10,fontWeight:600,color:K.mut}}>Attach files from repo</span>
+                <Btn sm v="ghost" onClick={loadAvailableFiles} style={{fontSize:9,padding:"1px 4px"}}>{filesLoading?"...":"↻"}</Btn>
+              </div>
+              <div style={{maxHeight:100,overflowY:"auto"}}>
+                {availableFiles.map(function(f) {
+                  var name = f.path.split("/").pop();
+                  var isAttached = contextFiles.find(function(cf){return cf.path===f.path;});
+                  return (
+                    <button key={f.path} onClick={function(){if(!isAttached) attachFile(f);}}
+                      disabled={isAttached}
+                      style={{display:"block",width:"100%",textAlign:"left",padding:"3px 6px",border:"none",background:"transparent",
+                        color:isAttached?K.ok:K.dim,fontSize:10,fontFamily:mono,cursor:isAttached?"default":"pointer",opacity:isAttached?0.5:1}}
+                      onMouseEnter={function(e){if(!isAttached) e.currentTarget.style.background=K.sfcH;}}
+                      onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+                      {isAttached?"✓ ":""}{name}
+                    </button>
+                  );
+                })}
+                {availableFiles.length===0 && !filesLoading && <div style={{fontSize:10,color:K.mut,padding:4}}>No files found. Upload SDF exports first.</div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Messages */}
+        <div style={{ flex:1,overflowY:"auto",padding:"12px 14px" }}>
+          {messages.length===0 && !loading && (
+            <div style={{textAlign:"center",padding:"40px 12px",color:K.mut}}>
+              <div style={{fontSize:28,marginBottom:12}}>✦</div>
+              <div style={{fontSize:13,marginBottom:6}}>AI Solution Advisor</div>
+              <div style={{fontSize:11,lineHeight:1.5}}>
+                Ask questions about {customer||"this customer"}'s account, get solution recommendations, or request a full solution JSON.
+                {contextSummary && <span style={{color:K.acc}}><br/>DB context auto-loaded.</span>}
+              </div>
+            </div>
+          )}
+          {messages.map(function(m,i) {
+            var isUser = m.role==="user";
+            // Check if message contains JSON solution
+            var hasJson = !isUser && m.content && m.content.indexOf('"project"')>-1 && m.content.indexOf('"tasks"')>-1;
+            return (
+              <div key={i} style={{marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                  <span style={{fontSize:10,fontWeight:600,color:isUser?K.acc:K.ora}}>{isUser?"You":"AI"}</span>
+                </div>
+                <div style={{
+                  padding:"10px 12px",borderRadius:8,fontSize:12,lineHeight:1.6,fontFamily:sans,
+                  background:isUser?K.accBg:K.code,border:"1px solid "+(isUser?K.acc+"22":K.bdr),
+                  color:K.txt,whiteSpace:"pre-wrap",wordBreak:"break-word"
+                }}>
+                  {m.content}
+                </div>
+                {hasJson && (
+                  <div style={{marginTop:4}}>
+                    <Btn sm v="success" onClick={function(){
+                      try {
+                        var match = m.content.match(/\{[\s\S]*"project"[\s\S]*"tasks"[\s\S]*\}/);
+                        if(match) { var json=JSON.parse(match[0]); navigator.clipboard.writeText(JSON.stringify(json,null,2)); alert("Solution JSON copied to clipboard. Use Open File to load it."); }
+                      } catch(e) { alert("Could not extract JSON: "+e.message); }
+                    }}>Copy solution JSON</Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {loading && (
+            <div style={{marginBottom:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                <span style={{fontSize:10,fontWeight:600,color:K.ora}}>AI</span>
+              </div>
+              <div style={{padding:"12px",background:K.code,borderRadius:8,border:"1px solid "+K.bdr}}>
+                <div style={{width:14,height:14,border:"2px solid "+K.bdr,borderTopColor:K.ora,borderRadius:"50%",animation:"spin 0.6s linear infinite"}} />
+              </div>
+            </div>
+          )}
+          <div ref={msgEnd}/>
+        </div>
+
+        {/* Input */}
+        <div style={{ padding:"10px 14px",borderTop:"1px solid "+K.bdr,background:K.sfc }}>
+          {!aiKey ? (
+            <div style={{textAlign:"center",padding:"8px",fontSize:11,color:K.mut}}>Set your Anthropic API key in Settings to use the AI Advisor.</div>
+          ) : (
+            <div style={{display:"flex",gap:8}}>
+              <textarea ref={inputRef} value={input} onChange={function(e){setInput(e.target.value);}}
+                onKeyDown={function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();}}}
+                placeholder="Ask about this customer's account..."
+                rows={2}
+                style={{flex:1,padding:"8px 10px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:12,fontFamily:sans,outline:"none",resize:"none",lineHeight:1.5}} />
+              <Btn v="primary" onClick={sendMessage} disabled={!input.trim()||loading} style={{alignSelf:"flex-end",padding:"8px 14px"}}>
+                {loading?"...":"Send"}
+              </Btn>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -1354,6 +1658,8 @@ Here is the document to parse:
     const [ghFlash, setGhFlash] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
     const [appView, setAppView] = useState("home"); // home | manageObjects | editor
+    const [aiKey, setAiKey] = useState("");
+    const [showChat, setShowChat] = useState(false);
     const ifr = useRef(null);
     const flRef = useRef(null);
 
@@ -1364,6 +1670,8 @@ Here is the document to parse:
         var c = new GitHubClient(saved);
         c.testConnection().then(function(user) { setGhClient(c); setGhUser(user); }).catch(function() { localStorage.removeItem("gh_pat_sdb"); });
       }
+      var savedAi = localStorage.getItem("anthropic_key_sdb");
+      if(savedAi) setAiKey(savedAi);
     }, []);
     
     const proj = (sol&&sol.project)||null;
@@ -1455,7 +1763,7 @@ Here is the document to parse:
     }, [tasks.length]);
     
     if(appView==="manageObjects") return (<>
-      <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
+      <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser} aiKey={aiKey} onAiKeyChange={setAiKey}
         onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
       <ManageObjects ghClient={ghClient} ghUser={ghUser}
         onBack={()=>setAppView("home")}
@@ -1463,7 +1771,7 @@ Here is the document to parse:
     </>);
 
     if(!sol) return (<>
-      <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
+      <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser} aiKey={aiKey} onAiKeyChange={setAiKey}
         onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
       <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");setGhFile(null);setAppView("editor");}}
         onOpen={(d,file,sha)=>{setSol(migrateSol(d));setATi(0);setView("build");setATab("context");setGhFile(file||null);setAppView("editor");}}
@@ -1477,7 +1785,7 @@ Here is the document to parse:
     
     return (
       <div style={{ display:"flex",height:"100vh",background:K.bg,color:K.txt,fontFamily:sans,overflow:"hidden" }}>
-        <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
+        <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser} aiKey={aiKey} onAiKeyChange={setAiKey}
           onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
         {/* Repo Sidebar */}
         {ghClient && <RepoSidebar ghClient={ghClient} onOpenDesign={openGhDesign}
@@ -1491,8 +1799,9 @@ Here is the document to parse:
               <span style={{ fontSize:13,fontWeight:700,color:K.txt }}>Solution Builder</span>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <Btn sm v="ghost" onClick={()=>setShowChat(!showChat)} style={{fontSize:12,padding:"2px 6px",color:showChat?K.ora:K.mut}} title="AI Advisor">✦</Btn>
               <Btn sm v="ghost" onClick={()=>setShowSettings(true)} style={{fontSize:12,padding:"2px 6px",color:ghClient?K.ok:K.mut}}>⚙</Btn>
-              <Btn sm v="ghost" onClick={()=>{setSol(null);setGhFile(null);setGhFlash(null);setAppView("home");}} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
+              <Btn sm v="ghost" onClick={()=>{setSol(null);setGhFile(null);setGhFlash(null);setAppView("home");setShowChat(false);}} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
             </div>
           </div>
           <div style={{ padding:"4px 14px 8px",overflowY:"auto" }}>
@@ -1666,6 +1975,9 @@ Here is the document to parse:
             )}
           </>)}
         </div>
+        {/* AI Chat Panel */}
+        <AIChatPanel show={showChat} onClose={()=>setShowChat(false)} aiKey={aiKey} ghClient={ghClient}
+          customer={proj&&proj.customer} currentSolution={sol} />
       </div>
     );
   }
