@@ -114,7 +114,7 @@
       requirements: [{ ref: "REQ-01", type: "user", details: "" }],
       assumptions: [{ ref: "ASM-01", details: "" }],
       solutionOverview: "",
-      diagrams: "",
+      diagrams: [],
       dataStructures: [{ id: Date.now(), recordName: "", type: "standard", customRecordId: "", headerFields: [{ name: "", id: "_ccc_", fieldType: "", notes: "" }], lineFields: [] }],
       scripts: [],
     };
@@ -347,6 +347,119 @@
     );
   }
   
+  // ─── Diagrams Panel ───
+  function DiagramsPanel({ diagrams, onUpdate }) {
+    const [drag, setDrag] = useState(false);
+    const [viewImg, setViewImg] = useState(null);
+    const fileRef = useRef(null);
+
+    function processFile(file) {
+      if(!file || !file.type.startsWith("image/")) return;
+      if(file.size > 10 * 1024 * 1024) { alert("Image too large (max 10MB)"); return; }
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var entry = { id: Date.now() + Math.random(), name: file.name.replace(/\.[^.]+$/,""), dataUrl: e.target.result, addedAt: new Date().toISOString() };
+        onUpdate([...(diagrams||[]), entry]);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function handlePaste(e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if(!items) return;
+      for(var i=0;i<items.length;i++) {
+        if(items[i].type.indexOf("image") !== -1) {
+          e.preventDefault();
+          var file = items[i].getAsFile();
+          if(file) processFile(file);
+          return;
+        }
+      }
+    }
+
+    function handleDrop(e) {
+      e.preventDefault(); setDrag(false);
+      var files = e.dataTransfer.files;
+      for(var i=0;i<files.length;i++) { processFile(files[i]); }
+    }
+
+    function removeDiagram(id) {
+      onUpdate((diagrams||[]).filter(function(d){return d.id!==id;}));
+    }
+
+    function renameDiagram(id, newName) {
+      onUpdate((diagrams||[]).map(function(d){return d.id===id?{...d,name:newName}:d;}));
+    }
+
+    var diags = diagrams || [];
+    var sizeKB = diags.reduce(function(s,d){return s+(d.dataUrl?d.dataUrl.length:0);},0) / 1024;
+
+    return (
+      <div onPaste={handlePaste} tabIndex={0} style={{outline:"none"}}>
+        {/* Drop zone */}
+        <div onDragOver={function(e){e.preventDefault();setDrag(true);}} onDragLeave={function(){setDrag(false);}} onDrop={handleDrop}
+          onClick={function(){fileRef.current&&fileRef.current.click();}}
+          style={{ padding:"24px 16px",border:"2px dashed "+(drag?K.acc:K.bdr),borderRadius:10,background:drag?K.accBg:"transparent",
+            textAlign:"center",cursor:"pointer",transition:"all 0.2s",marginBottom:16 }}>
+          <p style={{ fontSize:13,color:drag?K.acc:K.dim,margin:"0 0 4px",fontWeight:600 }}>{drag?"Drop images here":"Click, drag & drop, or paste (Ctrl+V) images"}</p>
+          <p style={{ fontSize:11,color:K.mut,margin:0 }}>PNG, JPG, GIF, WebP — max 10MB each</p>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}}
+          onChange={function(e){var f=e.target.files;for(var i=0;i<f.length;i++){processFile(f[i]);}e.target.value="";}} />
+
+        {/* Diagrams grid */}
+        {diags.length > 0 && (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <span style={{fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.06em"}}>{diags.length} diagram{diags.length!==1?"s":""}</span>
+              <span style={{fontSize:10,color:K.mut,fontFamily:mono}}>{sizeKB<1024?(sizeKB.toFixed(0)+" KB"):((sizeKB/1024).toFixed(1)+" MB")} in JSON</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:12}}>
+              {diags.map(function(d) {
+                return (
+                  <div key={d.id} style={{background:K.code,border:"1px solid "+K.bdr,borderRadius:8,overflow:"hidden"}}>
+                    <div style={{position:"relative",cursor:"pointer"}} onClick={function(){setViewImg(d);}}>
+                      <img src={d.dataUrl} alt={d.name} style={{width:"100%",height:140,objectFit:"contain",background:"#000",display:"block"}} />
+                      <div style={{position:"absolute",top:4,right:4,display:"flex",gap:2}}>
+                        <button onClick={function(e){e.stopPropagation();removeDiagram(d.id);}}
+                          style={{width:22,height:22,borderRadius:4,border:"none",background:"rgba(0,0,0,0.7)",color:K.err,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                      </div>
+                    </div>
+                    <div style={{padding:"6px 8px"}}>
+                      <input value={d.name} onChange={function(e){renameDiagram(d.id,e.target.value);}}
+                        style={{width:"100%",background:"transparent",border:"none",color:K.txt,fontSize:11,fontFamily:sans,outline:"none",padding:0}} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {diags.length===0 && (
+          <div style={{textAlign:"center",padding:"20px",color:K.mut,fontSize:12}}>
+            No diagrams added yet. Upload images or paste from clipboard.
+          </div>
+        )}
+
+        {/* Lightbox */}
+        {viewImg && (
+          <div style={{position:"fixed",inset:0,zIndex:200,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}
+            onClick={function(){setViewImg(null);}}>
+            <div style={{maxWidth:"90vw",maxHeight:"90vh",position:"relative"}} onClick={function(e){e.stopPropagation();}}>
+              <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"85vh",objectFit:"contain",borderRadius:8}} />
+              <div style={{textAlign:"center",padding:"8px 0"}}>
+                <span style={{fontSize:13,color:"#fff",fontWeight:600}}>{viewImg.name}</span>
+              </div>
+              <button onClick={function(){setViewImg(null);}}
+                style={{position:"absolute",top:-8,right:-8,width:28,height:28,borderRadius:"50%",border:"none",background:K.sfc,color:K.txt,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ─── AI Suggestions ───
   function AISug({ context, requirements, onApply }) {
     const [loading, setLoading] = useState(false);
@@ -422,7 +535,8 @@
         const ep = s.entryPoints.filter(e=>e.pseudo).map(e=>'<div style="margin:6px 0 6px 16px;padding-left:10px;border-left:2px solid #ddd;"><code style="color:#e67e22;font-size:12px;">'+e.name+'</code><pre style="background:#f8f8f8;padding:8px;border-radius:4px;font-size:11px;margin:4px 0;white-space:pre-wrap;">'+e.pseudo+'</pre></div>').join("");
         return '<div style="margin-bottom:12px;padding:10px;background:#f9f9fb;border-radius:6px;border:1px solid #eee;"><p style="margin:0 0 4px;"><strong>'+s.name+'</strong> <span style="font-size:11px;color:#888;">('+s.type+')</span></p><p style="margin:0;font-size:12px;color:#555;">Deployed on: '+(s.deployOn||"N/A")+' · Triggers: '+(s.triggers||"N/A")+'</p>'+ep+'</div>';
       }).join("");
-      return '<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Task '+(ti+1)+': '+t.name+'</h2><h3 style="color:#555;margin-top:16px;">Context</h3><p>'+(t.context||"\u2014")+'</p><h3 style="color:#555;">Requirements</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+rr+'</table><h3 style="color:#555;">Assumptions/Limitations</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+ar+'</table><h3 style="color:#555;">Solution</h3><p>'+(t.solutionOverview||"\u2014")+'</p>'+(dsh?'<h3 style="color:#555;">Data Structure</h3>'+dsh:'')+(scr?'<h3 style="color:#555;">Scripts</h3>'+scr:'')+'</div>';
+      const diagImgs = (Array.isArray(t.diagrams)?t.diagrams:[]).map(d=>'<div style="margin-bottom:12px;"><img src="'+d.dataUrl+'" alt="'+(d.name||"")+'" style="max-width:100%;border:1px solid #eee;border-radius:4px;"/><p style="font-size:11px;color:#888;margin:4px 0 0;">'+(d.name||"Diagram")+'</p></div>').join("");
+      return '<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Task '+(ti+1)+': '+t.name+'</h2><h3 style="color:#555;margin-top:16px;">Context</h3><p>'+(t.context||"\u2014")+'</p><h3 style="color:#555;">Requirements</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+rr+'</table><h3 style="color:#555;">Assumptions/Limitations</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+ar+'</table><h3 style="color:#555;">Solution</h3><p>'+(t.solutionOverview||"\u2014")+'</p>'+(diagImgs?'<h3 style="color:#555;">Diagrams</h3>'+diagImgs:'')+(dsh?'<h3 style="color:#555;">Data Structure</h3>'+dsh:'')+(scr?'<h3 style="color:#555;">Scripts</h3>'+scr:'')+'</div>';
     }).join("");
     const er = estimates.map(e=>'<tr><td style="padding:6px 10px;border:1px solid #ddd;">'+e.task+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.min||"\u2014")+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.max||"\u2014")+'</td></tr>').join("");
     const tMin = estimates.reduce((s,e)=>s+(parseFloat(e.min)||0),0);
@@ -773,7 +887,7 @@ Here is the document to parse:
           if(!t.assumptions) t.assumptions = [{ref:"ASM-01",details:""}];
           if(!t.context) t.context = "";
           if(!t.solutionOverview) t.solutionOverview = "";
-          if(!t.diagrams) t.diagrams = "";
+          if(!t.diagrams || typeof t.diagrams === "string") t.diagrams = [];
         });
         setImportPreview(parsed);
       } catch(e) {
@@ -992,6 +1106,19 @@ Here is the document to parse:
       if(type==="script"&&SCRIPT_TYPES[data.type]){ const s=mkScript(data.type); s.name=data.name||s.name; s.deployOn=data.deployOn||""; s.triggers=data.triggers||""; upTask("scripts",[...task.scripts,s]); }
     };
     
+    // Migrate old solution formats to current schema
+    const migrateSol = d => {
+      if(!d||!d.project) return d;
+      if(!d.project.author) d.project.author = "";
+      if(!d.project.changeType) d.project.changeType = "";
+      if(!d.project.status) d.project.status = "draft";
+      if(!d.project.deploymentDate) d.project.deploymentDate = "";
+      (d.tasks||[]).forEach(t => {
+        if(!t.diagrams || typeof t.diagrams === "string") t.diagrams = [];
+      });
+      return d;
+    };
+
     const saveJson = () => {
       const payload = {...sol, savedAt: new Date().toISOString()};
       const json = JSON.stringify(payload, null, 2);
@@ -1021,7 +1148,7 @@ Here is the document to parse:
     const loadJson = file => {
       if(!file) return;
       const r = new FileReader();
-      r.onload = e => { try { const d=JSON.parse(e.target.result); if(d.project&&d.tasks){setSol(d);setATi(0);setATab("context");setView("build");setShowPv(false);setGhFile(null);} else alert("Invalid file."); } catch { alert("Could not parse."); } };
+      r.onload = e => { try { const d=JSON.parse(e.target.result); if(d.project&&d.tasks){setSol(migrateSol(d));setATi(0);setATab("context");setView("build");setShowPv(false);setGhFile(null);} else alert("Invalid file."); } catch { alert("Could not parse."); } };
       r.readAsText(file);
     };
     
@@ -1036,12 +1163,12 @@ Here is the document to parse:
       <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
         onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
       <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");setGhFile(null);}}
-        onOpen={(d,file,sha)=>{setSol(d);setATi(0);setView("build");setATab("context");setGhFile(file||null);}}
+        onOpen={(d,file,sha)=>{setSol(migrateSol(d));setATi(0);setView("build");setATab("context");setGhFile(file||null);}}
         ghConnected={!!ghClient} onShowSettings={()=>setShowSettings(true)} />
     </>);
 
     const openGhDesign = (file) => {
-      ghClient.readDesign(file.path).then(r=>{setSol(r.content);setATi(0);setView("build");setATab("context");setGhFile({name:file.name,path:file.path,sha:r.sha});}).catch(e=>alert("Error: "+e.message));
+      ghClient.readDesign(file.path).then(r=>{setSol(migrateSol(r.content));setATi(0);setView("build");setATab("context");setGhFile({name:file.name,path:file.path,sha:r.sha});}).catch(e=>alert("Error: "+e.message));
     };
     
     return (
@@ -1116,7 +1243,7 @@ Here is the document to parse:
           {view==="build"&&task&&(<>
             <h2 style={{ fontSize:20,fontWeight:700,margin:"0 0 4px",fontFamily:sans }}>{task.name}</h2>
             <p style={{ fontSize:12,color:K.mut,margin:"0 0 16px" }}>Define context, requirements, data structure, and scripts.</p>
-            <Tabs tabs={[{key:"context",label:"Context & Reqs"},{key:"solution",label:"Solution"},{key:"data",label:"Data Structure"},{key:"scripts",label:"Scripts"}]} active={aTab} onChange={setATab} />
+            <Tabs tabs={[{key:"context",label:"Context & Reqs"},{key:"solution",label:"Solution"},{key:"diagrams",label:"Diagrams"},{key:"data",label:"Data Structure"},{key:"scripts",label:"Scripts"}]} active={aTab} onChange={setATab} />
             
             {aTab==="context"&&(<>
               <AISug context={task.context} requirements={task.requirements} onApply={applySug} />
@@ -1149,7 +1276,12 @@ Here is the document to parse:
             {aTab==="solution"&&(
               <Sec title="Solution Overview">
                 <TI value={task.solutionOverview} onChange={v=>upTask("solutionOverview",v)} placeholder="Explain the solution approach. Should be understandable by non-technical stakeholders." multi rows={6} />
-                <TI label="Diagrams / Notes" value={task.diagrams} onChange={v=>upTask("diagrams",v)} placeholder="Reference any supporting diagrams or artifacts..." multi rows={3} />
+              </Sec>
+            )}
+
+            {aTab==="diagrams"&&(
+              <Sec title="Diagrams">
+                <DiagramsPanel diagrams={task.diagrams} onUpdate={v=>upTask("diagrams",v)} />
               </Sec>
             )}
             
