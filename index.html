@@ -23,6 +23,7 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script type="text/babel" data-presets="react">
   const { useState, useCallback, useRef, useEffect } = React;
   
@@ -193,6 +194,56 @@
     async getWorkflowStatus() {
       try { const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/actions/runs?per_page=1");
         const d = await r.json(); return d.workflow_runs&&d.workflow_runs[0]||null; } catch(e) { return null; }
+    }
+    // List files currently in sdf-exports/{customer}/
+    async listSdfExports(customer) {
+      try {
+        var r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/trees/main?recursive=1");
+        var data = await r.json();
+        var prefix = "sdf-exports/"+customer+"/";
+        return (data.tree||[]).filter(function(f){return f.path.startsWith(prefix)&&f.type==="blob";}).map(function(f){return {path:f.path,sha:f.sha,size:f.size};});
+      } catch(e) { return []; }
+    }
+    // Batch commit files using Git Trees API (one commit for many files)
+    async batchCommit(files, message) {
+      // files: [{path:"sdf-exports/cust/Objects/x.xml", content:"...", encoding:"utf-8"|"base64"}]
+      // 1. Get latest commit SHA
+      var refR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/ref/heads/main");
+      var refData = await refR.json();
+      var latestSha = refData.object.sha;
+      // 2. Get the tree of that commit
+      var commitR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/commits/"+latestSha);
+      var commitData = await commitR.json();
+      var baseTreeSha = commitData.tree.sha;
+      // 3. Create blobs for each file
+      var treeItems = [];
+      for(var i=0;i<files.length;i++) {
+        var f = files[i];
+        var blobR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/blobs",{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({content:f.content,encoding:f.encoding||"utf-8"})
+        });
+        var blobData = await blobR.json();
+        treeItems.push({path:f.path,mode:"100644",type:"blob",sha:blobData.sha});
+      }
+      // 4. Create new tree (base_tree = merge on top of existing)
+      var treeR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/trees",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({base_tree:baseTreeSha,tree:treeItems})
+      });
+      var treeData = await treeR.json();
+      // 5. Create commit
+      var newCommitR = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/commits",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:message,tree:treeData.sha,parents:[latestSha]})
+      });
+      var newCommitData = await newCommitR.json();
+      // 6. Update ref
+      await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/git/refs/heads/main",{
+        method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({sha:newCommitData.sha})
+      });
+      return newCommitData;
     }
   }
 
@@ -835,8 +886,233 @@ Here is the document to parse:
     );
   }
 
+  // ─── Manage Objects View ───
+  function ManageObjects({ ghClient, ghUser, onBack, onShowSettings }) {
+    const [customer, setCustomer] = useState("");
+    const [customers, setCustomers] = useState([]);
+    const [zipFile, setZipFile] = useState(null);
+    const [preview, setPreview] = useState(null); // {objects:[], fileCabinet:[], other:[]}
+    const [existing, setExisting] = useState([]); // files already in repo
+    const [uploading, setUploading] = useState(false);
+    const [progress, setProgress] = useState("");
+    const [result, setResult] = useState(null); // {type,text}
+    const fileRef = useRef(null);
+
+    // Load customer list from designs
+    useEffect(function() {
+      if(!ghClient) return;
+      ghClient.listDesigns().then(function(designs) {
+        var custs = {};
+        designs.forEach(function(d) { var c=d.name.split("_")[0]; if(c) custs[c]=true; });
+        setCustomers(Object.keys(custs).sort());
+      }).catch(function(){});
+    }, [ghClient]);
+
+    // When customer changes, load existing sdf-exports
+    useEffect(function() {
+      if(!ghClient||!customer) { setExisting([]); return; }
+      var slug = customer.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+      ghClient.listSdfExports(slug).then(function(files) { setExisting(files); }).catch(function(){setExisting([]);});
+    }, [ghClient, customer]);
+
+    function handleZip(file) {
+      if(!file) return;
+      setZipFile(file);
+      setResult(null);
+      setProgress("Reading zip...");
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        JSZip.loadAsync(e.target.result).then(function(zip) {
+          var objects = [];
+          var fileCabinet = [];
+          var other = [];
+          var promises = [];
+          zip.forEach(function(relativePath, entry) {
+            if(entry.dir) return;
+            // Normalize path: strip leading folder if zip has a root folder
+            var path = relativePath;
+            // Detect SDF structure
+            var isObj = /(?:^|\/)(Objects|src\/Objects)\//i.test(path);
+            var isFC = /(?:^|\/)(FileCabinet|src\/FileCabinet)\//i.test(path);
+            // Extract the part after Objects/ or FileCabinet/
+            var cleanPath = path;
+            var objMatch = path.match(/(?:Objects|src\/Objects)\/(.*)/i);
+            var fcMatch = path.match(/(?:FileCabinet|src\/FileCabinet)\/(.*)/i);
+            if(objMatch) cleanPath = "Objects/"+objMatch[1];
+            else if(fcMatch) cleanPath = "FileCabinet/"+fcMatch[1];
+            // Read content
+            var isText = /\.(xml|js|html|ftl|json|css|txt|csv|cfg|ts)$/i.test(path);
+            var p = entry.async(isText?"string":"base64").then(function(content) {
+              var item = { path:cleanPath, originalPath:path, size:content.length, encoding:isText?"utf-8":"base64", content:content };
+              if(isObj) objects.push(item);
+              else if(isFC) fileCabinet.push(item);
+              else other.push(item);
+            });
+            promises.push(p);
+          });
+          Promise.all(promises).then(function() {
+            setPreview({ objects:objects.sort(function(a,b){return a.path.localeCompare(b.path);}), fileCabinet:fileCabinet.sort(function(a,b){return a.path.localeCompare(b.path);}), other:other });
+            setProgress("");
+          });
+        }).catch(function(err) {
+          setProgress("");
+          setResult({type:"err",text:"Failed to read zip: "+err.message});
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function pushToRepo() {
+      if(!ghClient||!customer||!preview) return;
+      var slug = customer.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+      var basePath = "sdf-exports/"+slug+"/";
+      // Build file list
+      var allFiles = [];
+      (preview.objects||[]).forEach(function(f) { allFiles.push({path:basePath+f.path,content:f.content,encoding:f.encoding}); });
+      (preview.fileCabinet||[]).forEach(function(f) { allFiles.push({path:basePath+f.path,content:f.content,encoding:f.encoding}); });
+      if(allFiles.length===0) { setResult({type:"err",text:"No Objects or FileCabinet files found in zip."}); return; }
+      setUploading(true);
+      setProgress("Pushing "+allFiles.length+" files to repo...");
+      setResult(null);
+      var objCount = (preview.objects||[]).length;
+      var fcCount = (preview.fileCabinet||[]).length;
+      var msg = "Update "+customer+" SDF export ("+objCount+" objects, "+fcCount+" files)";
+      ghClient.batchCommit(allFiles, msg).then(function() {
+        setResult({type:"ok",text:"Pushed "+allFiles.length+" files to "+basePath});
+        setProgress("");
+        // Refresh existing
+        ghClient.listSdfExports(slug).then(function(files){setExisting(files);}).catch(function(){});
+      }).catch(function(err) {
+        setResult({type:"err",text:"Push failed: "+err.message});
+        setProgress("");
+      }).finally(function() { setUploading(false); });
+    }
+
+    // Classify existing files for summary
+    var existingObjs = existing.filter(function(f){return f.path.includes("/Objects/");}).length;
+    var existingFC = existing.filter(function(f){return f.path.includes("/FileCabinet/");}).length;
+
+    return (
+      <div style={{ height:"100vh",background:K.bg,display:"flex",alignItems:"flex-start",justifyContent:"center",fontFamily:sans,overflowY:"auto" }}>
+        <div style={{ width:680,maxWidth:"90vw",padding:"60px 20px 40px" }}>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24 }}>
+            <div>
+              <h2 style={{ fontSize:22,fontWeight:700,color:K.txt,margin:"0 0 4px" }}>Manage Account Objects</h2>
+              <p style={{ fontSize:12,color:K.dim,margin:0 }}>Upload SDF exports to populate the solutions database</p>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              {!ghClient && <Btn sm onClick={onShowSettings} style={{color:K.acc}}>Connect Repo</Btn>}
+              <Btn sm v="ghost" onClick={onBack} style={{color:K.dim}}>← Home</Btn>
+            </div>
+          </div>
+
+          {!ghClient ? (
+            <div style={{ textAlign:"center",padding:"60px 20px",background:K.sfc,borderRadius:12,border:"1px solid "+K.bdr }}>
+              <p style={{ fontSize:14,color:K.dim,margin:"0 0 12px" }}>Connect to your GitHub repository first</p>
+              <Btn v="primary" onClick={onShowSettings}>Open Settings</Btn>
+            </div>
+          ) : (
+            <div>
+              {/* Step 1: Select customer */}
+              <div style={{ background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,padding:20,marginBottom:16 }}>
+                <label style={{ display:"block",fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8 }}>1. Select customer</label>
+                <div style={{display:"flex",gap:8}}>
+                  <input value={customer} onChange={function(e){setCustomer(e.target.value);}} placeholder="Customer name"
+                    list="cust-list"
+                    style={{ flex:1,padding:"8px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:sans,outline:"none" }} />
+                  <datalist id="cust-list">
+                    {customers.map(function(c){return <option key={c} value={c.replace(/-/g," ")}>{c.replace(/-/g," ")}</option>;})}
+                  </datalist>
+                </div>
+                {customer && existing.length > 0 && (
+                  <div style={{ marginTop:10,padding:"8px 12px",background:K.accBg,borderRadius:6,fontSize:11,color:K.dim }}>
+                    Existing in repo: <span style={{color:K.acc,fontWeight:600}}>{existingObjs} objects</span>, <span style={{color:K.acc,fontWeight:600}}>{existingFC} files</span>
+                    <span style={{color:K.mut}}> — new upload will merge (add/update only)</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Step 2: Upload zip */}
+              <div style={{ background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,padding:20,marginBottom:16,opacity:customer?1:0.4,pointerEvents:customer?"auto":"none" }}>
+                <label style={{ display:"block",fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8 }}>2. Upload SDF export (.zip)</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <Btn onClick={function(){fileRef.current&&fileRef.current.click();}}>
+                    {zipFile ? "Change File" : "Choose Zip File"}
+                  </Btn>
+                  {zipFile && <span style={{fontSize:12,color:K.txt}}>{zipFile.name} <span style={{color:K.mut}}>({(zipFile.size/1024).toFixed(0)} KB)</span></span>}
+                </div>
+                <input ref={fileRef} type="file" accept=".zip" style={{display:"none"}}
+                  onChange={function(e){if(e.target.files[0]) handleZip(e.target.files[0]);e.target.value="";}} />
+                {progress && <div style={{marginTop:10,fontSize:11,color:K.acc}}>{progress}</div>}
+              </div>
+
+              {/* Step 3: Preview */}
+              {preview && (
+                <div style={{ background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,padding:20,marginBottom:16 }}>
+                  <label style={{ display:"block",fontSize:10,fontWeight:600,color:K.mut,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12 }}>3. Review & push</label>
+
+                  <div style={{display:"flex",gap:16,marginBottom:16}}>
+                    <div style={{flex:1,padding:"12px",background:K.code,borderRadius:8,textAlign:"center"}}>
+                      <div style={{fontSize:24,fontWeight:700,color:K.acc,fontFamily:mono}}>{preview.objects.length}</div>
+                      <div style={{fontSize:11,color:K.dim}}>Objects (XML)</div>
+                    </div>
+                    <div style={{flex:1,padding:"12px",background:K.code,borderRadius:8,textAlign:"center"}}>
+                      <div style={{fontSize:24,fontWeight:700,color:K.ok,fontFamily:mono}}>{preview.fileCabinet.length}</div>
+                      <div style={{fontSize:11,color:K.dim}}>FileCabinet files</div>
+                    </div>
+                    {preview.other.length>0 && (
+                      <div style={{flex:1,padding:"12px",background:K.code,borderRadius:8,textAlign:"center"}}>
+                        <div style={{fontSize:24,fontWeight:700,color:K.mut,fontFamily:mono}}>{preview.other.length}</div>
+                        <div style={{fontSize:11,color:K.dim}}>Other (skipped)</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* File list */}
+                  <div style={{maxHeight:240,overflowY:"auto",marginBottom:16}}>
+                    {preview.objects.length>0 && (
+                      <div style={{marginBottom:8}}>
+                        <div style={{fontSize:10,fontWeight:600,color:K.acc,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Objects</div>
+                        {preview.objects.map(function(f){
+                          return <div key={f.path} style={{padding:"3px 0",fontSize:11,fontFamily:mono,color:K.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.path}</div>;
+                        })}
+                      </div>
+                    )}
+                    {preview.fileCabinet.length>0 && (
+                      <div>
+                        <div style={{fontSize:10,fontWeight:600,color:K.ok,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>FileCabinet</div>
+                        {preview.fileCabinet.map(function(f){
+                          return <div key={f.path} style={{padding:"3px 0",fontSize:11,fontFamily:mono,color:K.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.path}</div>;
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <Btn v="primary" onClick={pushToRepo} disabled={uploading} style={{width:"100%",justifyContent:"center",padding:"12px"}}>
+                    {uploading ? "Pushing..." : "Push "+((preview.objects.length||0)+(preview.fileCabinet.length||0))+" files to repo"}
+                  </Btn>
+                </div>
+              )}
+
+              {/* Result */}
+              {result && (
+                <div style={{ padding:"12px 16px",borderRadius:8,fontSize:12,fontFamily:mono,
+                  background:result.type==="ok"?"rgba(74,222,128,0.08)":K.errBg,
+                  color:result.type==="ok"?K.ok:K.err,
+                  border:"1px solid "+(result.type==="ok"?K.ok+"33":K.err+"33") }}>
+                  {result.text}
+                  {result.type==="ok" && <div style={{fontSize:11,color:K.dim,marginTop:4,fontFamily:sans}}>The GitHub Action will rebuild the database shortly.</div>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ─── Landing Page ───
-  function Landing({ onNew, onOpen, ghConnected, onShowSettings }) {
+  function Landing({ onNew, onOpen, ghConnected, onShowSettings, onManageObjects }) {
     const [drag, setDrag] = useState(false);
     const [mode, setMode] = useState("home"); // home | import
     const [importText, setImportText] = useState("");
@@ -1021,7 +1297,7 @@ Here is the document to parse:
             </div>
             <p style={{ fontSize:13,color:K.dim,margin:0 }}>NetSuite Technical Design & Solutioning Tool</p>
           </div>
-          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24 }}>
             <button onClick={onNew} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
                     onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
               <div style={{ fontSize:22,marginBottom:8,color:K.acc }}>+</div>
@@ -1039,6 +1315,12 @@ Here is the document to parse:
               <div style={{ fontSize:22,marginBottom:8,color:K.ora }}>✦</div>
               <div style={{ fontSize:14,fontWeight:700,color:K.txt,marginBottom:4 }}>Import Doc</div>
               <div style={{ fontSize:11,color:K.dim,lineHeight:1.4 }}>AI-parse a Word doc</div>
+            </button>
+            <button onClick={onManageObjects} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
+                    onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+              <div style={{ fontSize:22,marginBottom:8,color:K.ok }}>⬡</div>
+              <div style={{ fontSize:14,fontWeight:700,color:K.txt,marginBottom:4 }}>Manage Objects</div>
+              <div style={{ fontSize:11,color:K.dim,lineHeight:1.4 }}>Upload SDF exports</div>
             </button>
           </div>
           <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);load(e.dataTransfer.files[0]);}}
@@ -1071,6 +1353,7 @@ Here is the document to parse:
     const [ghSaving, setGhSaving] = useState(false);
     const [ghFlash, setGhFlash] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
+    const [appView, setAppView] = useState("home"); // home | manageObjects | editor
     const ifr = useRef(null);
     const flRef = useRef(null);
 
@@ -1171,12 +1454,21 @@ Here is the document to parse:
       setEsts(p => { const n=[...p]; tasks.forEach(t=>{ if(!n.find(e=>e.task===t.name)){const i=n.findIndex(e=>e.task==="Testing"); if(i>=0)n.splice(i,0,{task:t.name,min:"",max:""}); else n.push({task:t.name,min:"",max:""});} }); return n; });
     }, [tasks.length]);
     
+    if(appView==="manageObjects") return (<>
+      <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
+        onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
+      <ManageObjects ghClient={ghClient} ghUser={ghUser}
+        onBack={()=>setAppView("home")}
+        onShowSettings={()=>setShowSettings(true)} />
+    </>);
+
     if(!sol) return (<>
       <SettingsModal show={showSettings} onClose={()=>setShowSettings(false)} ghClient={ghClient} ghUser={ghUser}
         onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}} onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />
-      <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");setGhFile(null);}}
-        onOpen={(d,file,sha)=>{setSol(migrateSol(d));setATi(0);setView("build");setATab("context");setGhFile(file||null);}}
-        ghConnected={!!ghClient} onShowSettings={()=>setShowSettings(true)} />
+      <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");setGhFile(null);setAppView("editor");}}
+        onOpen={(d,file,sha)=>{setSol(migrateSol(d));setATi(0);setView("build");setATab("context");setGhFile(file||null);setAppView("editor");}}
+        ghConnected={!!ghClient} onShowSettings={()=>setShowSettings(true)}
+        onManageObjects={()=>setAppView("manageObjects")} />
     </>);
 
     const openGhDesign = (file) => {
@@ -1200,7 +1492,7 @@ Here is the document to parse:
             </div>
             <div style={{display:"flex",alignItems:"center",gap:4}}>
               <Btn sm v="ghost" onClick={()=>setShowSettings(true)} style={{fontSize:12,padding:"2px 6px",color:ghClient?K.ok:K.mut}}>⚙</Btn>
-              <Btn sm v="ghost" onClick={()=>{setSol(null);setGhFile(null);setGhFlash(null);}} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
+              <Btn sm v="ghost" onClick={()=>{setSol(null);setGhFile(null);setGhFlash(null);setAppView("home");}} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
             </div>
           </div>
           <div style={{ padding:"4px 14px 8px",overflowY:"auto" }}>
