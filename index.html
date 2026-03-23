@@ -22,6 +22,7 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.min.js"></script>
 <script type="text/babel" data-presets="react">
   const { useState, useCallback, useRef, useEffect } = React;
   
@@ -145,6 +146,64 @@
   };
   const mono = "'JetBrains Mono','SF Mono','Cascadia Code','Fira Code',monospace";
   const sans = "'DM Sans','Inter',-apple-system,sans-serif";
+
+  // ─── GitHub Repo Config ───
+  const GH_OWNER = "ccc-mtzeng";
+  const GH_REPO = "ccc-solutions-db";
+  const GH_DESIGNS = "designs";
+  const GH_DB_BRANCH = "dist-db";
+  const GH_DB_PATH = "dist/solutions.db";
+  const GH_API = "https://api.github.com";
+
+  class GitHubClient {
+    constructor(token) {
+      this.token = token;
+      this.headers = { "Authorization":"Bearer "+token, "Accept":"application/vnd.github+json", "X-GitHub-Api-Version":"2022-11-28" };
+    }
+    async req(ep, opts={}) {
+      const url = ep.startsWith("http") ? ep : GH_API+ep;
+      const res = await fetch(url, { ...opts, headers:{ ...this.headers, ...opts.headers } });
+      if(!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message||"GitHub API "+res.status); }
+      return res;
+    }
+    async testConnection() {
+      const r = await this.req("/user"); const user = await r.json();
+      await this.req("/repos/"+GH_OWNER+"/"+GH_REPO);
+      return user;
+    }
+    async listDesigns() {
+      try { const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/contents/"+GH_DESIGNS);
+        const f = await r.json(); return f.filter(x=>x.name.endsWith(".json")).map(x=>({name:x.name,path:x.path,sha:x.sha,size:x.size}));
+      } catch(e) { if(e.message&&e.message.includes("Not Found")) return []; throw e; }
+    }
+    async readDesign(path) {
+      const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/contents/"+path);
+      const f = await r.json(); return { content:JSON.parse(atob(f.content.replace(/\n/g,""))), sha:f.sha };
+    }
+    async writeDesign(fileName, content, existingSha) {
+      const path = GH_DESIGNS+"/"+fileName;
+      const body = { message:"Save design: "+fileName, content:btoa(unescape(encodeURIComponent(JSON.stringify(content,null,2)))) };
+      if(existingSha) body.sha = existingSha;
+      const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/contents/"+path, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      return await r.json();
+    }
+    async deleteDesign(path, sha) {
+      await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/contents/"+path, { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:"Delete: "+path,sha:sha}) });
+    }
+    async getWorkflowStatus() {
+      try { const r = await this.req("/repos/"+GH_OWNER+"/"+GH_REPO+"/actions/runs?per_page=1");
+        const d = await r.json(); return d.workflow_runs&&d.workflow_runs[0]||null; } catch(e) { return null; }
+    }
+  }
+
+  function ghFileName(sol) {
+    var p = sol&&sol.project;
+    if(!p) return "untitled.json";
+    var c = (p.customer||"unknown").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+    var t = (p.title||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+    var v = (p.version||"1.0").replace(/\./g,"_");
+    return c+"_"+t+"_v"+v+".json";
+  }
   
   // ─── Primitives ───
   
@@ -445,14 +504,44 @@ Here is the document to parse:
 `;
   
   // ─── Landing Page ───
-  function Landing({ onNew, onOpen }) {
+  function Landing({ onNew, onOpen, ghClient, ghUser, onGhConnect, onGhDisconnect }) {
     const [drag, setDrag] = useState(false);
-    const [mode, setMode] = useState("home"); // home | import
+    const [mode, setMode] = useState("home"); // home | import | ghconnect
     const [importText, setImportText] = useState("");
     const [importing, setImporting] = useState(false);
     const [importErr, setImportErr] = useState(null);
     const [importPreview, setImportPreview] = useState(null);
+    const [ghToken, setGhToken] = useState("");
+    const [ghLoading, setGhLoading] = useState(false);
+    const [ghErr, setGhErr] = useState(null);
+    const [ghRemember, setGhRemember] = useState(false);
+    const [ghDesigns, setGhDesigns] = useState([]);
+    const [ghDesignsLoading, setGhDesignsLoading] = useState(false);
     const ref = useRef(null);
+
+    // Auto-connect with saved token
+    useEffect(function() {
+      if(!ghClient) { var saved = localStorage.getItem("gh_pat_sdb"); if(saved) { setGhToken(saved); setGhRemember(true); doGhConnect(saved,true); } }
+    }, []);
+
+    // Load designs list when connected
+    useEffect(function() {
+      if(ghClient && mode==="ghconnect") { setGhDesignsLoading(true); ghClient.listDesigns().then(function(d){setGhDesigns(d);}).catch(function(){}).finally(function(){setGhDesignsLoading(false);}); }
+    }, [ghClient, mode]);
+
+    function doGhConnect(t, isAuto) {
+      if(!t) return; setGhLoading(true); setGhErr(null);
+      var client = new GitHubClient(t);
+      client.testConnection().then(function(user) {
+        if(ghRemember||isAuto) localStorage.setItem("gh_pat_sdb",t);
+        onGhConnect(client, user);
+        setMode("ghconnect");
+      }).catch(function(e) { setGhErr(e.message); if(isAuto) localStorage.removeItem("gh_pat_sdb"); }).finally(function() { setGhLoading(false); });
+    }
+
+    function openGhDesign(file) {
+      ghClient.readDesign(file.path).then(function(result) { onOpen(result.content, file, result.sha); }).catch(function(e) { alert("Error: "+e.message); });
+    }
     
     const load = file => {
       if(!file) return;
@@ -519,7 +608,80 @@ Here is the document to parse:
     
     const hoverOn = e => { e.currentTarget.style.borderColor=K.acc; e.currentTarget.style.background=K.accBg; };
     const hoverOff = e => { e.currentTarget.style.borderColor=K.bdr; e.currentTarget.style.background=K.sfc; };
-    
+
+    if(mode==="ghconnect") {
+      return (
+        <div style={{ height:"100vh",background:K.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:sans }}>
+          <div style={{ width:560,maxWidth:"90vw",maxHeight:"90vh",overflowY:"auto" }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20 }}>
+              <div>
+                <h2 style={{ fontSize:20,fontWeight:700,color:K.txt,margin:"0 0 4px" }}>Solution Repository</h2>
+                <p style={{ fontSize:12,color:K.dim,margin:0 }}>{ghClient ? "Connected to "+GH_OWNER+"/"+GH_REPO : "Connect to your private repo"}</p>
+              </div>
+              <Btn sm v="ghost" onClick={()=>setMode("home")} style={{color:K.dim}}>← Back</Btn>
+            </div>
+
+            {!ghClient ? (
+              <div style={{ background:K.sfc,border:"1px solid "+K.bdr,borderRadius:12,padding:24 }}>
+                <label style={{ display:"block",fontSize:11,fontWeight:600,color:K.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6 }}>GitHub Personal Access Token</label>
+                <input type="password" value={ghToken} onChange={function(e){setGhToken(e.target.value);}}
+                  onKeyDown={function(e){if(e.key==="Enter") doGhConnect(ghToken);}}
+                  placeholder="github_pat_..." style={{ width:"100%",padding:"10px 12px",background:K.code,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:mono,outline:"none",marginBottom:12 }} />
+                <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:16 }}>
+                  <input type="checkbox" id="ghrem" checked={ghRemember} onChange={function(e){setGhRemember(e.target.checked);}} style={{accentColor:K.acc}} />
+                  <label htmlFor="ghrem" style={{ fontSize:12,color:K.dim,cursor:"pointer" }}>Remember on this device</label>
+                </div>
+                {ghErr && <div style={{ padding:"8px 12px",background:K.errBg,border:"1px solid rgba(239,68,68,0.2)",borderRadius:6,fontSize:12,color:K.err,marginBottom:12,fontFamily:mono }}>{ghErr}</div>}
+                <Btn v="primary" onClick={function(){doGhConnect(ghToken);}} disabled={!ghToken||ghLoading} style={{width:"100%"}}>{ghLoading?"Connecting...":"Connect"}</Btn>
+                <div style={{ marginTop:16,padding:12,background:K.accBg,borderRadius:8,fontSize:11,color:K.dim,lineHeight:1.6 }}>
+                  <strong style={{color:K.acc}}>Setup:</strong> Create a fine-grained PAT at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" style={{color:K.acc,textDecoration:"underline"}}>github.com/settings/tokens</a>
+                  <br/>— Repository: <span style={{fontFamily:mono}}>{GH_REPO}</span> · Permissions: <span style={{fontFamily:mono}}>Contents: R/W, Actions: Read</span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,marginBottom:16 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                    <img src={ghUser.avatar_url} alt="" style={{width:28,height:28,borderRadius:"50%"}} />
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:K.txt}}>{ghUser.login}</div>
+                      <div style={{fontSize:10,fontFamily:mono,color:K.mut}}>{GH_OWNER}/{GH_REPO}</div>
+                    </div>
+                  </div>
+                  <Btn sm v="ghost" onClick={function(){onGhDisconnect();setMode("home");}} style={{color:K.mut,fontSize:10}}>Disconnect</Btn>
+                </div>
+
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8 }}>
+                    <span style={{ fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:K.mut }}>Designs in repo</span>
+                    <Btn sm v="ghost" onClick={function(){setGhDesignsLoading(true);ghClient.listDesigns().then(function(d){setGhDesigns(d);}).finally(function(){setGhDesignsLoading(false);});}} style={{fontSize:10}}>↻ Refresh</Btn>
+                  </div>
+                  {ghDesignsLoading && <div style={{padding:"12px",fontSize:11,color:K.mut}}>Loading...</div>}
+                  <div style={{ maxHeight:360,overflowY:"auto" }}>
+                    {ghDesigns.map(function(d) {
+                      return (
+                        <button key={d.path} onClick={function(){openGhDesign(d);}}
+                          style={{ display:"block",width:"100%",textAlign:"left",border:"1px solid "+K.bdr,background:K.sfc,borderRadius:8,padding:"10px 14px",marginBottom:6,cursor:"pointer",transition:"all 0.1s" }}
+                          onMouseEnter={function(e){e.currentTarget.style.borderColor=K.acc;}} onMouseLeave={function(e){e.currentTarget.style.borderColor=K.bdr;}}>
+                          <div style={{fontSize:12,color:K.txt,fontFamily:mono,marginBottom:2}}>{d.name}</div>
+                          <div style={{fontSize:10,color:K.mut}}>{(d.size/1024).toFixed(1)} KB</div>
+                        </button>
+                      );
+                    })}
+                    {!ghDesignsLoading && ghDesigns.length===0 && <div style={{padding:12,fontSize:11,color:K.mut,textAlign:"center"}}>No designs yet</div>}
+                  </div>
+                </div>
+
+                <div style={{ display:"flex",gap:10 }}>
+                  <Btn v="primary" onClick={onNew} style={{flex:1,justifyContent:"center"}}>+ New Solution</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     if(mode==="import") {
       const taskCount = importPreview ? importPreview.tasks.length : 0;
       const scriptCount = importPreview ? importPreview.tasks.reduce((s,t)=>s+(t.scripts||[]).length,0) : 0;
@@ -621,7 +783,7 @@ Here is the document to parse:
             </div>
             <p style={{ fontSize:13,color:K.dim,margin:0 }}>NetSuite Technical Design & Solutioning Tool</p>
           </div>
-          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24 }}>
             <button onClick={onNew} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
                     onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
               <div style={{ fontSize:22,marginBottom:8,color:K.acc }}>+</div>
@@ -631,8 +793,14 @@ Here is the document to parse:
             <button onClick={()=>ref.current&&ref.current.click()} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
                     onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
               <div style={{ fontSize:22,marginBottom:8,color:K.acc }}>↑</div>
-              <div style={{ fontSize:14,fontWeight:700,color:K.txt,marginBottom:4 }}>Open Solution</div>
-              <div style={{ fontSize:11,color:K.dim,lineHeight:1.4 }}>Load a .json file</div>
+              <div style={{ fontSize:14,fontWeight:700,color:K.txt,marginBottom:4 }}>Open File</div>
+              <div style={{ fontSize:11,color:K.dim,lineHeight:1.4 }}>Load a local .json</div>
+            </button>
+            <button onClick={()=>setMode("ghconnect")} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+(ghClient?K.ok+"66":K.bdr),borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
+                    onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+              <div style={{ fontSize:22,marginBottom:8,color:ghClient?K.ok:K.acc }}>⬡</div>
+              <div style={{ fontSize:14,fontWeight:700,color:K.txt,marginBottom:4 }}>{ghClient?"Browse Repo":"Connect Repo"}</div>
+              <div style={{ fontSize:11,color:ghClient?K.ok:K.dim,lineHeight:1.4 }}>{ghClient?"Connected as "+ghUser.login:"Save designs to GitHub"}</div>
             </button>
             <button onClick={()=>setMode("import")} style={{ padding:"24px 16px",background:K.sfc,border:"1px solid "+K.bdr,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s" }}
                     onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
@@ -665,6 +833,11 @@ Here is the document to parse:
     const [showPv, setShowPv] = useState(false);
     const [expHtml, setExpHtml] = useState("");
     const [flash, setFlash] = useState(false);
+    const [ghClient, setGhClient] = useState(null);
+    const [ghUser, setGhUser] = useState(null);
+    const [ghFile, setGhFile] = useState(null);   // {name,path,sha} of current file in repo
+    const [ghSaving, setGhSaving] = useState(false);
+    const [ghFlash, setGhFlash] = useState(null);  // {type,text}
     const ifr = useRef(null);
     const flRef = useRef(null);
     
@@ -713,11 +886,26 @@ Here is the document to parse:
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       setFlash(true); setTimeout(()=>setFlash(false),2000);
     };
+
+    const saveToRepo = () => {
+      if(!ghClient||!sol) return;
+      var payload = {...sol, savedAt: new Date().toISOString()};
+      var fileName = ghFile ? ghFile.name : ghFileName(payload);
+      setGhSaving(true); setGhFlash(null);
+      ghClient.writeDesign(fileName, payload, ghFile?ghFile.sha:null).then(function(result) {
+        setGhFile({name:fileName,path:result.content.path,sha:result.content.sha});
+        setSol(payload);
+        setGhFlash({type:"ok",text:"Saved to repo"});
+        setTimeout(function(){setGhFlash(null);},3000);
+      }).catch(function(e) {
+        setGhFlash({type:"err",text:e.message});
+      }).finally(function() { setGhSaving(false); });
+    };
     
     const loadJson = file => {
       if(!file) return;
       const r = new FileReader();
-      r.onload = e => { try { const d=JSON.parse(e.target.result); if(d.project&&d.tasks){setSol(d);setATi(0);setATab("context");setView("build");setShowPv(false);} else alert("Invalid file."); } catch { alert("Could not parse."); } };
+      r.onload = e => { try { const d=JSON.parse(e.target.result); if(d.project&&d.tasks){setSol(d);setATi(0);setATab("context");setView("build");setShowPv(false);setGhFile(null);} else alert("Invalid file."); } catch { alert("Could not parse."); } };
       r.readAsText(file);
     };
     
@@ -728,7 +916,11 @@ Here is the document to parse:
       setEsts(p => { const n=[...p]; tasks.forEach(t=>{ if(!n.find(e=>e.task===t.name)){const i=n.findIndex(e=>e.task==="Testing"); if(i>=0)n.splice(i,0,{task:t.name,min:"",max:""}); else n.push({task:t.name,min:"",max:""});} }); return n; });
     }, [tasks.length]);
     
-    if(!sol) return <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");}} onOpen={d=>{setSol(d);setATi(0);setView("build");setATab("context");}} />;
+    if(!sol) return <Landing onNew={()=>{setSol(mkSolution());setATi(0);setView("build");setATab("context");setGhFile(null);}}
+      onOpen={(d,file,sha)=>{setSol(d);setATi(0);setView("build");setATab("context");setGhFile(file||null);}}
+      ghClient={ghClient} ghUser={ghUser}
+      onGhConnect={(c,u)=>{setGhClient(c);setGhUser(u);}}
+      onGhDisconnect={()=>{setGhClient(null);setGhUser(null);localStorage.removeItem("gh_pat_sdb");}} />;
     
     return (
       <div style={{ display:"flex",height:"100vh",background:K.bg,color:K.txt,fontFamily:sans,overflow:"hidden" }}>
@@ -739,7 +931,7 @@ Here is the document to parse:
               <span style={{ fontSize:18,fontWeight:800,color:K.acc,fontFamily:mono }}>NS</span>
               <span style={{ fontSize:13,fontWeight:700,color:K.txt }}>Solution Builder</span>
             </div>
-            <Btn sm v="ghost" onClick={()=>setSol(null)} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
+            <Btn sm v="ghost" onClick={()=>{setSol(null);setGhFile(null);setGhFlash(null);}} style={{ fontSize:10,color:K.dim }}>← Home</Btn>
           </div>
           <div style={{ padding:"4px 14px 8px" }}>
             <TI label="Project Title" value={proj.title} onChange={v=>setProj({...proj,title:v})} placeholder="Project Title" />
@@ -763,6 +955,15 @@ Here is the document to parse:
             </div>
           </div>
           <div style={{ padding:"10px 14px",borderTop:"1px solid "+K.bdr }}>
+            {ghClient && (
+              <div style={{ marginBottom:8 }}>
+                <Btn onClick={saveToRepo} disabled={ghSaving} style={{ width:"100%",justifyContent:"center",fontSize:11,marginBottom:4,background:ghFlash&&ghFlash.type==="ok"?"rgba(74,222,128,0.1)":K.accBg,color:ghFlash&&ghFlash.type==="ok"?K.ok:K.acc,border:"1px solid "+(ghFlash&&ghFlash.type==="ok"?K.ok+"44":K.acc+"44") }}>
+                  {ghSaving?"Saving...":ghFlash&&ghFlash.type==="ok"?"✓ "+ghFlash.text:ghFlash&&ghFlash.type==="err"?"✗ Error":"⬡ Save to Repo"}
+                </Btn>
+                {ghFile && <div style={{fontSize:9,color:K.mut,fontFamily:mono,textAlign:"center",marginBottom:2}}>{ghFile.name} · {ghFile.sha&&ghFile.sha.slice(0,7)}</div>}
+                {ghFlash&&ghFlash.type==="err" && <div style={{fontSize:9,color:K.err,fontFamily:mono,textAlign:"center",marginBottom:2}}>{ghFlash.text}</div>}
+              </div>
+            )}
             <Btn onClick={()=>setView("estimate")} style={{ width:"100%",justifyContent:"center",marginBottom:5,background:view==="estimate"?K.accBg:K.sfcH,color:view==="estimate"?K.acc:K.txt,fontSize:11 }}>Hours Estimate</Btn>
             <Btn onClick={()=>{setView("export");setShowPv(false);}} style={{ width:"100%",justifyContent:"center",marginBottom:5,background:view==="export"?K.accBg:K.sfcH,color:view==="export"?K.acc:K.txt,fontSize:11 }}>Export Document</Btn>
             <div style={{ display:"flex",gap:5 }}>
