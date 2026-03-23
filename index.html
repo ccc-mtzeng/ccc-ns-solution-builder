@@ -116,6 +116,7 @@
       assumptions: [{ ref: "ASM-01", details: "" }],
       solutionOverview: "",
       diagrams: [],
+      technicalNotes: [],
       dataStructures: [{ id: Date.now(), recordName: "", type: "standard", customRecordId: "", headerFields: [{ name: "", id: "_ccc_", fieldType: "", notes: "" }], lineFields: [] }],
       scripts: [],
     };
@@ -609,7 +610,8 @@
         return '<div style="margin-bottom:12px;padding:10px;background:#f9f9fb;border-radius:6px;border:1px solid #eee;"><p style="margin:0 0 4px;"><strong>'+s.name+'</strong> <span style="font-size:11px;color:#888;">('+s.type+')</span></p><p style="margin:0;font-size:12px;color:#555;">Deployed on: '+(s.deployOn||"N/A")+' · Triggers: '+(s.triggers||"N/A")+'</p>'+ep+'</div>';
       }).join("");
       const diagImgs = (Array.isArray(t.diagrams)?t.diagrams:[]).map(d=>'<div style="margin-bottom:12px;"><img src="'+d.dataUrl+'" alt="'+(d.name||"")+'" style="max-width:100%;border:1px solid #eee;border-radius:4px;"/><p style="font-size:11px;color:#888;margin:4px 0 0;">'+(d.name||"Diagram")+'</p></div>').join("");
-      return '<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Task '+(ti+1)+': '+t.name+'</h2><h3 style="color:#555;margin-top:16px;">Context</h3><p>'+(t.context||"\u2014")+'</p><h3 style="color:#555;">Requirements</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+rr+'</table><h3 style="color:#555;">Assumptions/Limitations</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+ar+'</table><h3 style="color:#555;">Solution</h3><p>'+(t.solutionOverview||"\u2014")+'</p>'+(diagImgs?'<h3 style="color:#555;">Diagrams</h3>'+diagImgs:'')+(dsh?'<h3 style="color:#555;">Data Structure</h3>'+dsh:'')+(scr?'<h3 style="color:#555;">Scripts</h3>'+scr:'')+'</div>';
+      const techNotes = (Array.isArray(t.technicalNotes)?t.technicalNotes:[]).filter(n=>n.title||n.content).map(n=>'<div style="margin-bottom:12px;padding:10px;background:#f9f9fb;border-radius:6px;border:1px solid #eee;"><p style="margin:0 0 4px;"><strong>'+(n.title||"Untitled")+'</strong> <span style="font-size:11px;color:#888;text-transform:capitalize;">('+((n.category||"other").replace(/_/g," "))+')</span></p><pre style="background:#f8f8f8;padding:8px;border-radius:4px;font-size:11px;margin:4px 0;white-space:pre-wrap;font-family:monospace;">'+(n.content||"\u2014")+'</pre></div>').join("");
+      return '<div style="page-break-before:always;"><h2 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:6px;">Task '+(ti+1)+': '+t.name+'</h2><h3 style="color:#555;margin-top:16px;">Context</h3><p>'+(t.context||"\u2014")+'</p><h3 style="color:#555;">Requirements</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+rr+'</table><h3 style="color:#555;">Assumptions/Limitations</h3><table style="width:100%;border-collapse:collapse;font-size:13px;">'+ar+'</table><h3 style="color:#555;">Solution</h3><p>'+(t.solutionOverview||"\u2014")+'</p>'+(techNotes?'<h3 style="color:#555;">Technical Notes</h3>'+techNotes:'')+(diagImgs?'<h3 style="color:#555;">Diagrams</h3>'+diagImgs:'')+(dsh?'<h3 style="color:#555;">Data Structure</h3>'+dsh:'')+(scr?'<h3 style="color:#555;">Scripts</h3>'+scr:'')+'</div>';
     }).join("");
     const er = estimates.map(e=>'<tr><td style="padding:6px 10px;border:1px solid #ddd;">'+e.task+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.min||"\u2014")+'</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;">'+(e.max||"\u2014")+'</td></tr>').join("");
     const tMin = estimates.reduce((s,e)=>s+(parseFloat(e.min)||0),0);
@@ -1480,6 +1482,7 @@ Here is the document to parse:
           if(!t.context) t.context = "";
           if(!t.solutionOverview) t.solutionOverview = "";
           if(!t.diagrams || typeof t.diagrams === "string") t.diagrams = [];
+          if(!t.technicalNotes) t.technicalNotes = [];
         });
         setImportPreview(parsed);
       } catch(e) {
@@ -1718,6 +1721,7 @@ Here is the document to parse:
       if(!d.project.deploymentDate) d.project.deploymentDate = "";
       (d.tasks||[]).forEach(t => {
         if(!t.diagrams || typeof t.diagrams === "string") t.diagrams = [];
+        if(!t.technicalNotes) t.technicalNotes = [];
       });
       return d;
     };
@@ -1886,11 +1890,40 @@ Here is the document to parse:
               </Sec>
             </>)}
             
-            {aTab==="solution"&&(
+            {aTab==="solution"&&(<>
               <Sec title="Solution Overview">
                 <TI value={task.solutionOverview} onChange={v=>upTask("solutionOverview",v)} placeholder="Explain the solution approach. Should be understandable by non-technical stakeholders." multi rows={6} />
               </Sec>
-            )}
+              <Sec title="Technical Notes" actions={<Btn sm onClick={()=>upTask("technicalNotes",[...(task.technicalNotes||[]),{id:Date.now()+Math.random(),title:"",category:"other",content:""}])}>+ Add Note</Btn>}>
+                <p style={{fontSize:11,color:K.mut,margin:"-4px 0 12px",lineHeight:1.5}}>Document library files, unconventional data structures, integrations, configurations, or anything that doesn't fit the structured builders.</p>
+                {(task.technicalNotes||[]).map((note,ni)=>(
+                  <div key={note.id} style={{background:K.code,border:"1px solid "+K.bdr,borderRadius:8,padding:16,marginBottom:12}}>
+                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"flex-start"}}>
+                      <div style={{flex:1}}>
+                        <input value={note.title} onChange={e=>{var v=e.target.value;upTask("technicalNotes",(task.technicalNotes||[]).map((n,j)=>j===ni?{...n,title:v}:n));}}
+                          placeholder="e.g., CCC_Utils Library, Custom REST Integration, Staging Table"
+                          style={{width:"100%",padding:"8px 12px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:13,fontFamily:sans,outline:"none",fontWeight:600}} />
+                      </div>
+                      <select value={note.category||"other"} onChange={e=>{var v=e.target.value;upTask("technicalNotes",(task.technicalNotes||[]).map((n,j)=>j===ni?{...n,category:v}:n));}}
+                        style={{padding:"8px 10px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:11,fontFamily:sans,outline:"none",width:130}}>
+                        <option value="library">Library File</option>
+                        <option value="data_structure">Data Structure</option>
+                        <option value="integration">Integration</option>
+                        <option value="configuration">Configuration</option>
+                        <option value="migration">Migration</option>
+                        <option value="other">Other</option>
+                      </select>
+                      <Btn sm v="danger" onClick={()=>upTask("technicalNotes",(task.technicalNotes||[]).filter((_,j)=>j!==ni))}>✕</Btn>
+                    </div>
+                    <textarea value={note.content} onChange={e=>{var v=e.target.value;upTask("technicalNotes",(task.technicalNotes||[]).map((n,j)=>j===ni?{...n,content:v}:n));}}
+                      placeholder={"Describe the purpose, structure, key functions, dependencies, or any details worth documenting.\n\nFor library files: what modules does it export? What do they do?\nFor data structures: what's the schema? How is it used?\nFor integrations: what endpoints, auth, data flow?"}
+                      rows={5}
+                      style={{width:"100%",padding:"10px 12px",background:K.bg,border:"1px solid "+K.bdr,borderRadius:6,color:K.txt,fontSize:12,fontFamily:mono,outline:"none",resize:"vertical",lineHeight:1.7}} />
+                  </div>
+                ))}
+                {(task.technicalNotes||[]).length===0 && <div style={{textAlign:"center",padding:"20px",color:K.mut,fontSize:12}}>No technical notes yet. Add notes for library files, custom structures, or other artifacts.</div>}
+              </Sec>
+            </>)}
 
             {aTab==="diagrams"&&(
               <Sec title="Diagrams">
