@@ -364,25 +364,6 @@
       reader.readAsDataURL(file);
     }
 
-    function handlePaste(e) {
-      var items = e.clipboardData && e.clipboardData.items;
-      if(!items) return;
-      for(var i=0;i<items.length;i++) {
-        if(items[i].type.indexOf("image") !== -1) {
-          e.preventDefault();
-          var file = items[i].getAsFile();
-          if(file) processFile(file);
-          return;
-        }
-      }
-    }
-
-    function handleDrop(e) {
-      e.preventDefault(); setDrag(false);
-      var files = e.dataTransfer.files;
-      for(var i=0;i<files.length;i++) { processFile(files[i]); }
-    }
-
     function removeDiagram(id) {
       onUpdate((diagrams||[]).filter(function(d){return d.id!==id;}));
     }
@@ -395,14 +376,45 @@
     var sizeKB = diags.reduce(function(s,d){return s+(d.dataUrl?d.dataUrl.length:0);},0) / 1024;
 
     return (
-      <div onPaste={handlePaste} tabIndex={0} style={{outline:"none"}}>
-        {/* Drop zone — drag only, no click */}
-        <div onDragOver={function(e){e.preventDefault();setDrag(true);}} onDragLeave={function(){setDrag(false);}} onDrop={handleDrop}
-          style={{ padding:"20px 16px",border:"2px dashed "+(drag?K.acc:K.bdr),borderRadius:10,background:drag?K.accBg:"transparent",
-            textAlign:"center",transition:"all 0.2s",marginBottom:12 }}>
-          <p style={{ fontSize:13,color:drag?K.acc:K.dim,margin:"0 0 4px",fontWeight:600 }}>{drag?"Drop images here":"Drag & drop images here, or paste from clipboard (Ctrl+V)"}</p>
-          <p style={{ fontSize:11,color:K.mut,margin:"0 0 10px" }}>PNG, JPG, GIF, WebP — max 10MB each</p>
-          <Btn sm onClick={function(e){e.stopPropagation();fileRef.current&&fileRef.current.click();}}>Browse Files</Btn>
+      <div>
+        {/* Actions row */}
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <Btn onClick={function(e){e.stopPropagation();fileRef.current&&fileRef.current.click();}}>Browse Files</Btn>
+          <span style={{fontSize:11,color:K.mut,alignSelf:"center"}}>or drag files below, or click the paste area and press Ctrl+V</span>
+        </div>
+        {/* Paste + drop target — contentEditable div that only accepts images */}
+        <div
+          contentEditable={true}
+          suppressContentEditableWarning={true}
+          onPaste={function(e) {
+            e.preventDefault();
+            var items = e.clipboardData && e.clipboardData.items;
+            if(!items) return;
+            for(var i=0;i<items.length;i++) {
+              if(items[i].type.indexOf("image") !== -1) {
+                var file = items[i].getAsFile();
+                if(file) processFile(file);
+                return;
+              }
+            }
+          }}
+          onDragOver={function(e){e.preventDefault();setDrag(true);}}
+          onDragLeave={function(){setDrag(false);}}
+          onDrop={function(e){
+            e.preventDefault(); setDrag(false);
+            var files = e.dataTransfer.files;
+            for(var i=0;i<files.length;i++) { processFile(files[i]); }
+          }}
+          onKeyDown={function(e){if(e.key!=="v"||(!e.ctrlKey&&!e.metaKey)){e.preventDefault();}}}
+          onInput={function(e){e.target.textContent="";}}
+          style={{
+            minHeight:60,padding:"16px",border:"2px dashed "+(drag?K.acc:K.bdr),borderRadius:10,
+            background:drag?K.accBg:K.code,textAlign:"center",transition:"all 0.2s",marginBottom:16,
+            cursor:"text",outline:"none",color:K.mut,fontSize:12,fontFamily:sans,lineHeight:"28px",
+          }}
+          data-placeholder="true"
+        >
+          {drag?"Drop images here":"Click here and press Ctrl+V to paste an image"}
         </div>
         <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}}
           onChange={function(e){var f=e.target.files;for(var i=0;i<f.length;i++){processFile(f[i]);}e.target.value="";}} />
