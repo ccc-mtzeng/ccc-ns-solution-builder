@@ -564,6 +564,7 @@ Here is the document to parse:
     const [designs, setDesigns] = useState([]);
     const [loading, setLoading] = useState(true);
     const [expanded, setExpanded] = useState({});
+    const [collapsed, setCollapsed] = useState(false);
 
     useEffect(function() {
       if(!ghClient) return;
@@ -576,7 +577,6 @@ Here is the document to parse:
       ghClient.listDesigns().then(function(d) { setDesigns(d); }).catch(function(){}).finally(function() { setLoading(false); });
     }
 
-    // Group by customer (first segment of filename before _)
     var grouped = {};
     designs.forEach(function(d) {
       var parts = d.name.split("_");
@@ -588,17 +588,40 @@ Here is the document to parse:
 
     function toggle(c) { setExpanded(function(p) { var n={...p}; n[c]=!n[c]; return n; }); }
 
+    // Collapsed: thin strip with toggle
+    if(collapsed) {
+      return (
+        <div style={{ width:36,minWidth:36,background:K.bg,borderRight:"1px solid "+K.bdr,display:"flex",flexDirection:"column",alignItems:"center",paddingTop:10 }}>
+          <button onClick={function(){setCollapsed(false);}} title="Expand repository"
+            style={{ width:24,height:24,borderRadius:6,border:"1px solid "+K.bdr,background:"transparent",color:K.dim,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s" }}
+            onMouseEnter={function(e){e.currentTarget.style.borderColor=K.acc;e.currentTarget.style.color=K.acc;}}
+            onMouseLeave={function(e){e.currentTarget.style.borderColor=K.bdr;e.currentTarget.style.color=K.dim;}}>
+            ▸
+          </button>
+          <div style={{writingMode:"vertical-rl",fontSize:9,color:K.mut,letterSpacing:"0.1em",marginTop:12,textTransform:"uppercase",fontWeight:600,fontFamily:sans}}>Repo</div>
+        </div>
+      );
+    }
+
     return (
-      <div style={{ width:220,minWidth:220,background:K.bg,borderRight:"1px solid "+K.bdr,display:"flex",flexDirection:"column",overflow:"hidden" }}>
-        <div style={{ padding:"12px 12px 8px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid "+K.bdr }}>
+      <div style={{ width:220,minWidth:220,background:K.bg,borderRight:"1px solid "+K.bdr,display:"flex",flexDirection:"column",overflow:"hidden",transition:"width 0.15s" }}>
+        <div style={{ padding:"10px 10px 8px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid "+K.bdr }}>
           <span style={{ fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:K.mut }}>Repository</span>
-          <Btn sm v="ghost" onClick={refresh} style={{fontSize:10,padding:"2px 6px"}}>↻</Btn>
+          <div style={{display:"flex",gap:2}}>
+            <Btn sm v="ghost" onClick={refresh} style={{fontSize:10,padding:"2px 6px"}}>↻</Btn>
+            <button onClick={function(){setCollapsed(true);}} title="Collapse"
+              style={{ padding:"2px 6px",background:"transparent",border:"none",color:K.mut,cursor:"pointer",fontSize:10,borderRadius:4,transition:"color 0.15s" }}
+              onMouseEnter={function(e){e.currentTarget.style.color=K.txt;}}
+              onMouseLeave={function(e){e.currentTarget.style.color=K.mut;}}>
+              ◂
+            </button>
+          </div>
         </div>
         <div style={{ flex:1,overflowY:"auto",padding:"6px 0" }}>
           {loading && <div style={{padding:"12px",fontSize:11,color:K.mut,textAlign:"center"}}>Loading...</div>}
           {!loading && customers.length===0 && <div style={{padding:"12px",fontSize:11,color:K.mut,textAlign:"center"}}>No designs</div>}
           {customers.map(function(c) {
-            var isOpen = expanded[c] !== false; // default open
+            var isOpen = expanded[c] !== false;
             return (
               <div key={c}>
                 <button onClick={function(){toggle(c);}} style={{
