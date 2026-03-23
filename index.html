@@ -545,7 +545,7 @@
       const rTxt = requirements.filter(r=>r.details).map(r=>r.ref+": "+r.details).join("\n");
       const prompt = `You are a NetSuite technical consultant. Based on the following context and requirements, suggest the most appropriate NetSuite customization approach.\n\nContext: ${context||"Not provided"}\n\nRequirements:\n${rTxt||"Not provided"}\n\nRespond ONLY with valid JSON (no markdown, no backticks). Use this exact structure:\n{"summary":"2-3 sentence overview","suggestedScripts":[{"type":"One of: Client Script, User Event, Map/Reduce, Scheduled Script, Suitelet, Restlet, Workflow Action Script, Mass Update Script","name":"CCC naming convention","deployOn":"record","triggers":"when","reasoning":"why"}],"suggestedFields":[{"recordName":"record","fieldName":"name","fieldId":"_ccc_id","fieldType":"type","purpose":"why"}],"assumptions":["assumptions"],"considerations":["things to consider"]}`;
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":aiKey||"","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+        const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":aiKey||"","anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
         const data = await res.json();
         const txt = (data.content||[]).map(x=>x.text||"").join("")||"";
         setSug(JSON.parse(txt.replace(/```json|```/g,"").trim()));
@@ -1028,7 +1028,7 @@ Here is the document to parse:
       try {
         var apiMsgs = newMsgs.map(function(m){return {role:m.role,content:m.content};});
         var res = await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST",headers:{"Content-Type":"application/json","x-api-key":aiKey,"anthropic-dangerous-direct-browser-access":"true"},
+          method:"POST",headers:{"Content-Type":"application/json","x-api-key":aiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
           body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4096,system:buildSystemPrompt(),messages:apiMsgs})
         });
         var data = await res.json();
@@ -1447,7 +1447,7 @@ Here is the document to parse:
       setImporting(true); setImportErr(null); setImportPreview(null);
       try {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", headers: { "Content-Type": "application/json", "x-api-key": aiKey||"", "anthropic-dangerous-direct-browser-access": "true" },
+          method: "POST", headers: { "Content-Type": "application/json", "x-api-key": aiKey||"", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
           body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4096, messages: [{ role: "user", content: IMPORT_PROMPT + importText }] })
         });
         const data = await res.json();
