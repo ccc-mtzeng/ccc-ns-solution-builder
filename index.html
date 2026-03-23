@@ -929,10 +929,18 @@ Here is the document to parse:
     const [contextLoading, setContextLoading] = useState(false);
     const [contextSummary, setContextSummary] = useState(null); // from DB
     const [showCtx, setShowCtx] = useState(false);
+    const [showPrompt, setShowPrompt] = useState(false);
+    const [aiModel, setAiModel] = useState("claude-sonnet-4-20250514");
     const [availableFiles, setAvailableFiles] = useState([]);
     const [filesLoading, setFilesLoading] = useState(false);
     const msgEnd = useRef(null);
     const inputRef = useRef(null);
+
+    const AI_MODELS = [
+      {id:"claude-sonnet-4-20250514",label:"Sonnet 4"},
+      {id:"claude-opus-4-20250514",label:"Opus 4"},
+      {id:"claude-haiku-4-20250514",label:"Haiku 4"},
+    ];
 
     // Estimate tokens (rough: 4 chars per token)
     function estTokens(text) { return Math.ceil((text||"").length / 4); }
@@ -1029,7 +1037,7 @@ Here is the document to parse:
         var apiMsgs = newMsgs.map(function(m){return {role:m.role,content:m.content};});
         var res = await fetch("https://api.anthropic.com/v1/messages",{
           method:"POST",headers:{"Content-Type":"application/json","x-api-key":aiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-          body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4096,system:buildSystemPrompt(),messages:apiMsgs})
+          body:JSON.stringify({model:aiModel,max_tokens:4096,system:buildSystemPrompt(),messages:apiMsgs})
         });
         var data = await res.json();
         var txt = (data.content||[]).map(function(x){return x.text||"";}).join("");
@@ -1045,18 +1053,39 @@ Here is the document to parse:
     return (
       <div style={{ width:420,minWidth:420,borderLeft:"1px solid "+K.bdr,background:K.sfc,display:"flex",flexDirection:"column",overflow:"hidden" }}>
         {/* Header */}
-        <div style={{ padding:"12px 14px",borderBottom:"1px solid "+K.bdr,display:"flex",alignItems:"center",justifyContent:"space-between" }}>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <span style={{fontSize:14,color:K.ora}}>✦</span>
-            <span style={{fontSize:13,fontWeight:700,color:K.txt}}>AI Advisor</span>
-            {customer && <span style={{fontSize:10,color:K.mut,fontFamily:mono}}>({customer})</span>}
+        <div style={{ padding:"10px 14px",borderBottom:"1px solid "+K.bdr }}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:14,color:K.ora}}>✦</span>
+              <span style={{fontSize:13,fontWeight:700,color:K.txt}}>AI Advisor</span>
+              {customer && <span style={{fontSize:10,color:K.mut,fontFamily:mono}}>({customer})</span>}
+            </div>
+            <div style={{display:"flex",gap:4}}>
+              <Btn sm v="ghost" onClick={function(){setShowPrompt(!showPrompt);}} style={{fontSize:10,color:showPrompt?K.warn:K.dim}}>Prompt</Btn>
+              <Btn sm v="ghost" onClick={function(){setShowCtx(!showCtx);if(!showCtx&&availableFiles.length===0) loadAvailableFiles();}} style={{fontSize:10,color:showCtx?K.acc:K.dim}}>{showCtx?"Hide":"Context"}</Btn>
+              <Btn sm v="ghost" onClick={function(){setMessages([]);}} style={{fontSize:10,color:K.dim}}>Clear</Btn>
+              <Btn sm v="ghost" onClick={onClose} style={{color:K.dim}}>✕</Btn>
+            </div>
           </div>
-          <div style={{display:"flex",gap:4}}>
-            <Btn sm v="ghost" onClick={function(){setShowCtx(!showCtx);if(!showCtx&&availableFiles.length===0) loadAvailableFiles();}} style={{fontSize:10,color:showCtx?K.acc:K.dim}}>{showCtx?"Hide":"Context"}</Btn>
-            <Btn sm v="ghost" onClick={function(){setMessages([]);}} style={{fontSize:10,color:K.dim}}>Clear</Btn>
-            <Btn sm v="ghost" onClick={onClose} style={{color:K.dim}}>✕</Btn>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <label style={{fontSize:10,color:K.mut,flexShrink:0}}>Model:</label>
+            <select value={aiModel} onChange={function(e){setAiModel(e.target.value);}}
+              style={{flex:1,padding:"4px 8px",background:K.code,border:"1px solid "+K.bdr,borderRadius:4,color:K.txt,fontSize:11,fontFamily:mono,outline:"none"}}>
+              {AI_MODELS.map(function(m){return <option key={m.id} value={m.id}>{m.label}</option>;})}
+            </select>
           </div>
         </div>
+
+        {/* System prompt viewer (collapsible) */}
+        {showPrompt && (
+          <div style={{ borderBottom:"1px solid "+K.bdr,maxHeight:300,overflowY:"auto",background:"#0d0e12" }}>
+            <div style={{padding:"8px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid "+K.bdr}}>
+              <span style={{fontSize:10,fontWeight:600,color:K.warn,textTransform:"uppercase",letterSpacing:"0.06em"}}>System prompt being sent</span>
+              <Btn sm v="ghost" onClick={function(){navigator.clipboard.writeText(buildSystemPrompt()).catch(function(){});}} style={{fontSize:9,color:K.dim}}>Copy</Btn>
+            </div>
+            <pre style={{padding:"10px 14px",fontSize:10,fontFamily:mono,color:K.dim,lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word",margin:0}}>{buildSystemPrompt()}</pre>
+          </div>
+        )}
 
         {/* Context panel (collapsible) */}
         {showCtx && (
